@@ -1,0 +1,36 @@
+"""LLM and Embedding client abstractions for LexAgent."""
+from app.llm.client import (
+    LLMClient,
+    OpenAICompatClient,
+    OpenAICompatibleLLMClient,
+    FakeLLMClient,
+    MockLLMClient,
+    Embedder,
+    OpenAICompatEmbedder,
+    LocalEmbeddingClient,
+    FakeEmbedder,
+    MockEmbeddingClient,
+    get_llm_client,
+    set_llm_client,
+    get_embedding_client,
+    set_embedding_client,
+    extract_json_from_text,
+)
+
+__all__ = [
+    "LLMClient",
+    "OpenAICompatClient",
+    "OpenAICompatibleLLMClient",
+    "FakeLLMClient",
+    "MockLLMClient",
+    "Embedder",
+    "OpenAICompatEmbedder",
+    "LocalEmbeddingClient",
+    "FakeEmbedder",
+    "MockEmbeddingClient",
+    "get_llm_client",
+    "set_llm_client",
+    "get_embedding_client",
+    "set_embedding_client",
+    "extract_json_from_text",
+]

@@ -1,0 +1,130 @@
+"""Configuration settings for LexAgent Foundation (Phase 1).
+
+All model names, dimensions, URLs, and encryption keys are read from environment variables.
+Never hardcode secrets or model names.
+"""
+
+from functools import lru_cache
+from typing import Optional
+from pydantic import Field, AliasChoices
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application configuration with strict environment variable bindings."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # Local LLM endpoint (Ollama / vLLM / OpenAI-compatible local server)
+    LLM_BASE_URL: str = Field(
+        default="http://localhost:11434/v1",
+        description="Base URL for local OpenAI-compatible inference server.",
+    )
+    LLM_MODEL: str = Field(
+        default="qwen2.5:14b-instruct",
+        description="Model identifier served by the local LLM runtime.",
+    )
+
+    # Local Embedding endpoint & model
+    EMBED_MODEL: str = Field(
+        default="BAAI/bge-m3",
+        validation_alias=AliasChoices("EMBED_MODEL", "EMBEDDING_MODEL"),
+        description="Configurable embedding model name.",
+    )
+    EMBED_DIM: int = Field(
+        default=1024,
+        validation_alias=AliasChoices("EMBED_DIM", "EMBEDDING_DIM"),
+        description="Embedding vector dimension (e.g. 1024 for bge-m3).",
+    )
+
+    # Database
+    DB_URL: str = Field(
+        default="postgresql+psycopg://lexagent:lexagent_secret@localhost:5432/lexagent_db",
+        validation_alias=AliasChoices("DB_URL", "DATABASE_URL"),
+        description="SQLAlchemy database URL.",
+    )
+
+    # Security & Encryption
+    ENCRYPTION_KEY: str = Field(
+        default="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        validation_alias=AliasChoices("ENCRYPTION_KEY", "DOCUMENT_ENCRYPTION_KEY"),
+        description="Hex-encoded 32-byte key for AES-256-GCM encryption at rest.",
+    )
+    JWT_SECRET: str = Field(
+        default="super-secret-jwt-token-signing-key-for-local-lexagent",
+        validation_alias=AliasChoices("JWT_SECRET", "AUDIT_HMAC_SECRET"),
+        description="Secret key used for JWT signing and HMAC tamper prevention.",
+    )
+
+    # Optional paths and parameters
+    ENCRYPTED_STORAGE_DIR: str = Field(
+        default="./vault_storage",
+        description="Local directory path for storing AES-256-GCM encrypted document blobs.",
+    )
+    ENVIRONMENT: str = Field(default="development")
+    LOG_LEVEL: str = Field(default="INFO")
+    APP_HOST: str = Field(default="0.0.0.0")
+    APP_PORT: int = Field(default=8000)
+    LLM_TEMPERATURE: float = Field(default=0.1, ge=0.0, le=1.0)
+    LLM_MAX_RETRIES: int = Field(default=2, ge=0, le=5)
+    CONFIDENCE_THRESHOLD: float = Field(default=0.75, ge=0.0, le=1.0)
+
+    # Hardening & Guardrail Settings (Phase 6)
+    MAX_FILE_SIZE_BYTES: int = Field(
+        default=50 * 1024 * 1024,
+        description="Maximum allowed document file size in bytes (default 50MB).",
+    )
+    MAX_DOCUMENT_PAGES: int = Field(
+        default=200,
+        description="Maximum allowed document pages (default 200 pages).",
+    )
+    AGENT_TIMEOUT_SECONDS: int = Field(
+        default=60,
+        description="Agent LLM execution timeout in seconds.",
+    )
+    PII_MASKING_ENABLED: bool = Field(
+        default=True,
+        description="Enable automatic redaction of Aadhaar, PAN, and phone numbers in logs and audit.",
+    )
+
+    # Backward-compatible properties
+    @property
+    def DATABASE_URL(self) -> str:
+        return self.DB_URL
+
+    @property
+    def EMBEDDING_MODEL(self) -> str:
+        return self.EMBED_MODEL
+
+    @property
+    def EMBEDDING_DIM(self) -> int:
+        return self.EMBED_DIM
+
+    @property
+    def DOCUMENT_ENCRYPTION_KEY(self) -> str:
+        return self.ENCRYPTION_KEY
+
+    @property
+    def AUDIT_HMAC_SECRET(self) -> str:
+        return self.JWT_SECRET
+
+    # Mandatory Legal Disclaimer
+    DISCLAIMER_TEXT: str = Field(
+        default=(
+            "LEGAL DISCLAIMER: LexAgent is a decision-support intelligence system intended "
+            "exclusively for licensed advocates and legal researchers. It does not provide legal advice, "
+            "substitute professional judicial assessment, or establish an advocate-client relationship. "
+            "All statutory citations, limitation calculations, and precedents must be verified by counsel."
+        ),
+        description="Mandatory disclaimer attached to all legal outputs.",
+    )
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """Singleton getter for cached settings."""
+    return Settings()
