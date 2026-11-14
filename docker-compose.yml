@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: lexagent-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: lexagent
+      POSTGRES_PASSWORD: lexagent_secret
+      POSTGRES_DB: lexagent_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lexagent -d lexagent_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lexagent-api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_URL=postgresql+psycopg://lexagent:lexagent_secret@postgres:5432/lexagent_db
+      - DATABASE_URL=postgresql+psycopg://lexagent:lexagent_secret@postgres:5432/lexagent_db
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:14b-instruct}
+      - EMBED_MODEL=${EMBED_MODEL:-BAAI/bge-m3}
+      - EMBED_DIM=${EMBED_DIM:-1024}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      - JWT_SECRET=${JWT_SECRET:-super-secret-jwt-token-signing-key-for-local-lexagent}
+      - ENVIRONMENT=production
+    volumes:
+      - vault_data:/app/vault_storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: lexagent-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    profiles:
+      - ollama
+
+volumes:
+  pgdata:
+  vault_data:
+  ollama_models:

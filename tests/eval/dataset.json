@@ -1,0 +1,112 @@
+{
+  "benchmark_cases": [
+    {
+      "id": "BENCH-001",
+      "name": "English FIR - Cheating & Forgery (Delhi)",
+      "fixture_file": "fir_sample_en.txt",
+      "language": "english",
+      "doc_type": "FIR",
+      "ground_truth": {
+        "parties": [
+          {"name": "Vikramaditya Verma", "role": "complainant", "snippet": "Name: Vikramaditya Verma, S/o Late Shri R. K. Verma"},
+          {"name": "Rajeshwar Sharma", "role": "accused", "snippet": "Name: Rajeshwar Sharma, R/o Sector 21, Noida, Uttar Pradesh"}
+        ],
+        "dates": [
+          {"date_str": "15-03-2023", "normalized": "2023-03-15", "snippet": "Date & Time: 15-03-2023 at 11:30 hrs"},
+          {"date_str": "10-03-2023", "normalized": "2023-03-10", "snippet": "Date: 10-03-2023, Time: 14:30 hrs"}
+        ],
+        "sections": [
+          {"act": "IPC", "section_number": "420", "snippet": "Section 420, Section 406 of the Indian Penal Code (IPC)"},
+          {"act": "IPC", "section_number": "406", "snippet": "Section 420, Section 406 of the Indian Penal Code (IPC)"}
+        ],
+        "amounts": [
+          {"value": 1500000.0, "currency": "INR", "snippet": "Rs. 15,00,000 (Rupees Fifteen Lakhs)"}
+        ],
+        "statements": [
+          {
+            "speaker": "Vikramaditya Verma",
+            "role": "complainant",
+            "statement_type": "complaint",
+            "recorded_on": "15-03-2023",
+            "snippet": "The complainant Vikramaditya Verma states that on 10-03-2023, the accused Rajeshwar Sharma fraudulently induced the complainant to invest an amount of Rs. 15,00,000"
+          }
+        ],
+        "validation_issues_categories": ["MISSING_CLAUSE", "SECTION_VALIDITY"],
+        "timeline_events_count": 2,
+        "verified_precedents": ["(2012) 1 SCC 40"]
+      }
+    },
+    {
+      "id": "BENCH-002",
+      "name": "Hindi Private Complaint - Land Fraud (Jaipur)",
+      "fixture_file": "complaint_sample_hi.txt",
+      "language": "hindi",
+      "doc_type": "complaint",
+      "ground_truth": {
+        "parties": [
+          {"name": "रामेश्वर प्रसाद मीणा", "role": "complainant", "snippet": "रामेश्वर प्रसाद मीणा, आयु 48 वर्ष, पुत्र श्री जगदीश प्रसाद मीणा"},
+          {"name": "सुरेश कुमार अग्रवाल", "role": "accused", "snippet": "सुरेश कुमार अग्रवाल, पुत्र श्री मोहन लाल अग्रवाल"}
+        ],
+        "dates": [
+          {"date_str": "20-01-2024", "normalized": "2024-01-20", "snippet": "प्रस्तुति दिनांक: 20-01-2024"},
+          {"date_str": "12-01-2024", "normalized": "2024-01-12", "snippet": "दिनांक 12-01-2024 को अभियुक्त ने परिवादी को"}
+        ],
+        "sections": [
+          {"act": "CrPC", "section_number": "156(3)", "snippet": "धारा 156(3) दण्ड प्रक्रिया संहिता (CrPC)"},
+          {"act": "IPC", "section_number": "420", "snippet": "धारा 420, 406, 467, 468 भारतीय दण्ड संहिता (IPC)"}
+        ],
+        "amounts": [
+          {"value": 850000.0, "currency": "INR", "snippet": "₹ 8,50,000/- (आठ लाख पचास हजार रुपये)"}
+        ],
+        "statements": [
+          {
+            "speaker": "रामेश्वर प्रसाद मीणा",
+            "role": "complainant",
+            "statement_type": "complaint",
+            "recorded_on": "20-01-2024",
+            "snippet": "मैं, रामेश्वर प्रसाद मीणा, शपथपूर्वक बयान करता हूँ कि उक्त परिवाद के समस्त तथ्य मेरी निजी जानकारी में सत्य व सही हैं।"
+          }
+        ],
+        "validation_issues_categories": [],
+        "timeline_events_count": 2,
+        "verified_precedents": []
+      }
+    },
+    {
+      "id": "BENCH-003",
+      "name": "Hinglish Police Witness Statement u/s 161 CrPC (Hauz Khas)",
+      "fixture_file": "witness_statement_hinglish.txt",
+      "language": "hinglish",
+      "doc_type": "witness_statement",
+      "ground_truth": {
+        "parties": [
+          {"name": "Pradeep Malhotra", "role": "witness", "snippet": "Name: Pradeep Malhotra, Age: 42 years"},
+          {"name": "Sunil Gupta", "role": "accused", "snippet": "accused Sunil Gupta complainant Rajesh Verma ke paas aaya"}
+        ],
+        "dates": [
+          {"date_str": "25-04-2023", "normalized": "2023-04-25", "snippet": "Recorded On: 25-04-2023"},
+          {"date_str": "20-04-2023", "normalized": "2023-04-20", "snippet": "Main 20-04-2023 ko shaam lagbhag 6:30 PM"}
+        ],
+        "sections": [
+          {"act": "CrPC", "section_number": "161", "snippet": "STATEMENT OF WITNESS UNDER SECTION 161 Cr.P.C."},
+          {"act": "IPC", "section_number": "379", "snippet": "Under Section: 379/356/506 IPC"}
+        ],
+        "amounts": [
+          {"value": 500000.0, "currency": "INR", "snippet": "5 lakh rupaye ka payment kal tak nahi diya toh"}
+        ],
+        "statements": [
+          {
+            "speaker": "Pradeep Malhotra",
+            "role": "witness",
+            "statement_type": "161",
+            "recorded_on": "25-04-2023",
+            "snippet": "Yeh bayaan maine Police Officer Amit Kumar ko bina kisi dabaav ya darr ke sachha diya hai."
+          }
+        ],
+        "validation_issues_categories": [],
+        "timeline_events_count": 2,
+        "verified_precedents": []
+      }
+    }
+  ]
+}
