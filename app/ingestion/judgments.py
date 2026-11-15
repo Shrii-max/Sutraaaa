@@ -121,13 +121,14 @@ def ingest_judgment_items(
     session: Session,
     embedder: Optional[Embedder] = None,
     batch_size: int = 16,
+    build_embeddings: bool = True,
 ) -> Tuple[int, int]:
     """Ingest a list of judgment items idempotently with batch embeddings.
 
     Returns:
         Tuple[int, int]: (judgments_upserted_count, chunks_stored_count)
     """
-    embed_client = embedder or LocalEmbeddingClient()
+    embed_client = (embedder or LocalEmbeddingClient()) if build_embeddings else None
     total_judgments = 0
     total_chunks = 0
 
@@ -166,21 +167,26 @@ def ingest_judgment_items(
         if not chunks:
             chunks = [item.full_text[:1000]]
 
-        # Compute embeddings in batches
-        all_embeddings: List[List[float]] = []
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i : i + batch_size]
-            vecs = embed_client.embed(batch)
-            all_embeddings.extend(vecs)
+        all_embeddings = [None] * len(chunks)
+        j_embedding = None
+        if embed_client is not None:
+            # Compute embeddings in batches
+            all_embeddings: List[List[float]] = []
+            for i in range(0, len(chunks), batch_size):
+                batch = chunks[i : i + batch_size]
+                vecs = embed_client.embed(batch)
+                all_embeddings.extend(vecs)
 
-        # Judgment-level summary embedding
-        summary_repr = (
-            f"{item.title}. Court: {item.court}. Date: {item.date}. "
-            f"Sections: {', '.join(item.sections_cited)}. Outcome: {item.outcome or 'Adjudicated'}. "
-            f"{chunks[0][:500]}"
-        )
-        j_embedding = embed_client.embed([summary_repr])[0]
+            # Judgment-level summary embedding
+            summary_repr = (
+                f"{item.title}. Court: {item.court}. Date: {item.date}. "
+                f"Sections: {', '.join(item.sections_cited)}. Outcome: {item.outcome or 'Adjudicated'}. "
+                f"{chunks[0][:500]}"
+            )
+            j_embedding = embed_client.embed([summary_repr])[0]
 
+        if existing and embed_client is None and existing.embedding is not None:
+            continue
         if existing:
             # Update metadata
             existing.title = item.title

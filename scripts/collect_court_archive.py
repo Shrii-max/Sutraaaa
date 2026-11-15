@@ -23,7 +23,7 @@ def field(html: str, label: str) -> str | None:
     return unescape(match[1]).strip() if match else None
 
 
-def collect(client: httpx.Client, session: Session, court: str, year: int, limit: int, refresh_metadata: bool = False, *, keywords: tuple[str, ...] = (), max_entries: int | None = None) -> int:
+def collect(client: httpx.Client, session: Session, court: str, year: int, limit: int, refresh_metadata: bool = False, *, keywords: tuple[str, ...] = (), max_entries: int | None = None, build_embeddings: bool = True) -> int:
     bucket = f"https://indian-{court}-court-judgments.s3.ap-south-1.amazonaws.com/"
     prefix = f"metadata/json/year={year}/"
     parameters = {"list-type": 2, "prefix": prefix, "max-keys": 100}
@@ -74,7 +74,11 @@ def collect(client: httpx.Client, session: Session, court: str, year: int, limit
                     text = "\n\n".join(page.get_text() for page in pdf).strip()
                 if len(text) < 15:
                     continue
-                citation = metadata.get("nc_display") or f"{court.upper()} archive {stem}"
+                raw_citation = metadata.get("nc_display") or ""
+                neutral = re.search(r"(\d{4})\s*INSC\s*(\d+)", raw_citation, re.I)
+                citation = f"{neutral[1]} INSC {neutral[2]}" if neutral else raw_citation.strip()
+                if not citation:
+                    continue
                 bench = field(html, "Bench")
                 item = JudgmentIngestItem(
                     id=identity, title=unescape(title[1]).strip(),
@@ -83,7 +87,9 @@ def collect(client: httpx.Client, session: Session, court: str, year: int, limit
                     bench=bench,
                     summary=unescape(re.sub(r"<[^>]+>", "", issue[1])).strip() if issue else None,
                 )
-                count, _ = ingest_judgment_items([item], session=session)
+                count, _ = ingest_judgment_items([item], session=session, build_embeddings=build_embeddings)
+                if count:
+                    print(f'Imported {citation}', flush=True)
                 imported += count
                 if imported >= limit:
                     break

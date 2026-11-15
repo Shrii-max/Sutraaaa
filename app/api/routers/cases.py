@@ -375,13 +375,14 @@ def get_case_contradictions(
 @router.get("/{id}/similar-cases")
 def get_case_similar_cases(
     id: str,
+    document_id: str | None = None,
     current_user: UserModel = Depends(require_lawyer),
     db: Session = Depends(get_db),
 ):
     """Retrieve database-verified precedent cases (Hard Rule 4: zero hallucination)."""
     manager = CaseManager(db)
     is_admin = (current_user.role == "admin")
-    return manager.get_similar_cases(case_id=id, user_id=current_user.id, is_admin=is_admin)
+    return manager.get_similar_cases(case_id=id, user_id=current_user.id, is_admin=is_admin, document_id=document_id)
 
 
 class RelatedCaseArchiveRequest(BaseModel):

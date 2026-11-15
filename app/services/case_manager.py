@@ -184,9 +184,18 @@ class CaseManager:
             "disclaimer": self.settings.DISCLAIMER_TEXT,
         }
 
-    def get_similar_cases(self, case_id: str, user_id: str, is_admin: bool = False, query: str = "") -> Dict[str, Any]:
+    def get_similar_cases(self, case_id: str, user_id: str, is_admin: bool = False, query: str = "", document_id: str | None = None) -> Dict[str, Any]:
         """Retrieve precedent cases similar to the current matter (Hard Rule 4: DB verified only)."""
         case = self.get_case(case_id, user_id, is_admin)
+        if document_id:
+            document = self.session.get(DocumentModel, document_id)
+            if document is None or document.case_id != case.id:
+                raise HTTPException(status_code=404, detail="Document not found in this case.")
+            from app.services.official_judgments import rank_document_judgments
+
+            return {"case_id": case.id, "document_id": document_id,
+                    "similar_cases": rank_document_judgments(self.session, document_id),
+                    "disclaimer": self.settings.DISCLAIMER_TEXT}
         saved = self.session.execute(select(CaseJudgmentMatch, Judgment).join(
             Judgment, Judgment.id == CaseJudgmentMatch.judgment_id,
         ).where(CaseJudgmentMatch.case_id == case.id)
