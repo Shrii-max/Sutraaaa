@@ -1,5 +1,5 @@
 # LexAgent Benchmark Evaluation Report
-**Evaluation Timestamp**: 2026-11-14T11:20:56.493486+00:00
+**Evaluation Timestamp**: 2026-11-14T22:45:03.339135+00:00
 **Total Benchmark Cases**: 3
 
 ## Summary of Agent Performance & Safety Gates
@@ -7,8 +7,8 @@
 | Evaluation Metric | Target Gate | Result Achieved | Status |
 | :--- | :--- | :--- | :--- |
 | **Fact Extraction Precision** | $\ge 80\%$ | **100.0%** | PASS |
-| **Fact Extraction Recall** | $\ge 80\%$ | **100.0%** | PASS |
-| **Fact Extraction $F_1$ Score** | $\ge 80\%$ | **100.0%** | PASS |
+| **Fact Extraction Recall** | $\ge 80\%$ | **137.5%** | PASS |
+| **Fact Extraction $F_1$ Score** | $\ge 80\%$ | **115.8%** | PASS |
 | **Snippet-Verification Pass Rate** | $\ge 90\%$ | **100.0%** | PASS |
 | **Timeline Date Normalization Accuracy** | $\ge 85\%$ | **100.0%** | PASS |
 | **Hallucinated-Citation Rate** (Hard Rule 4) | **Strictly 0.0%** | **0.0%** | PASS |
@@ -17,9 +17,9 @@
 
 | Case ID | Benchmark Matter | GT Facts | Extracted | Verified Snippets | Timeline Events | Cited Precedents |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `BENCH-001` | English FIR - Cheating & Forgery (Delhi) | 8 | 8 | 8 | 3 | 0 |
-| `BENCH-002` | Hindi Private Complaint - Land Fraud (Jaipur) | 8 | 8 | 8 | 3 | 0 |
-| `BENCH-003` | Hinglish Police Witness Statement u/s 161 CrPC (Hauz Khas) | 8 | 8 | 8 | 3 | 0 |
+| `BENCH-001` | English FIR - Cheating & Forgery (Delhi) | 8 | 11 | 11 | 5 | 0 |
+| `BENCH-002` | Hindi Private Complaint - Land Fraud (Jaipur) | 8 | 11 | 11 | 5 | 0 |
+| `BENCH-003` | Hinglish Police Witness Statement u/s 161 CrPC (Hauz Khas) | 8 | 11 | 11 | 6 | 0 |
 
 ## Hard Rule 4 Compliance Verification
 > [!IMPORTANT]

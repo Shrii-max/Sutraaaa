@@ -33,7 +33,7 @@ def test_api_precedent_seeding_and_retrieval(client):
     assert res_seed.status_code == 200
     assert res_seed.json()["seeded_count"] == 1
 
-    res_list = client.get("/api/v1/cases")
+    res_list = client.get("/api/v1/precedents")
     assert res_list.status_code == 200
     assert res_list.json()["count"] >= 1
 

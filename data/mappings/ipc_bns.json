@@ -1,0 +1,129 @@
+{
+  "version": "2024.1",
+  "source_act": "Indian Penal Code, 1860 (IPC)",
+  "target_act": "Bharatiya Nyaya Sanhita, 2023 (BNS)",
+  "mappings": [
+    {
+      "ipc_section": "34",
+      "bns_section": "3(5)",
+      "heading": "Acts done by several persons in furtherance of common intention",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "120B",
+      "bns_section": "61",
+      "heading": "Criminal conspiracy",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "302",
+      "bns_section": "103(1)",
+      "heading": "Punishment for murder",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "304B",
+      "bns_section": "80",
+      "heading": "Dowry death",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "307",
+      "bns_section": "109",
+      "heading": "Attempt to murder",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "323",
+      "bns_section": "115(2)",
+      "heading": "Punishment for voluntarily causing hurt",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "341",
+      "bns_section": "126(2)",
+      "heading": "Punishment for wrongful restraint",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "376",
+      "bns_section": "64",
+      "heading": "Punishment for rape",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "379",
+      "bns_section": "303(2)",
+      "heading": "Punishment for theft",
+      "substantive_change": true,
+      "notes": "Added community service for petty theft under five thousand rupees"
+    },
+    {
+      "ipc_section": "384",
+      "bns_section": "308(2)",
+      "heading": "Punishment for extortion",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "406",
+      "bns_section": "316(2)",
+      "heading": "Punishment for criminal breach of trust",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "409",
+      "bns_section": "316(5)",
+      "heading": "Criminal breach of trust by public servant, banker, or agent",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "419",
+      "bns_section": "319",
+      "heading": "Punishment for cheating by personation",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "420",
+      "bns_section": "318(4)",
+      "heading": "Cheating and dishonestly inducing delivery of property",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "467",
+      "bns_section": "336(3)",
+      "heading": "Forgery of valuable security, will, etc.",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "468",
+      "bns_section": "336(4)",
+      "heading": "Forgery for purpose of cheating",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "471",
+      "bns_section": "340(2)",
+      "heading": "Using as genuine a forged document",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "498A",
+      "bns_section": "85",
+      "heading": "Husband or relative of husband subjecting woman to cruelty",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "504",
+      "bns_section": "352",
+      "heading": "Intentional insult with intent to provoke breach of peace",
+      "substantive_change": false
+    },
+    {
+      "ipc_section": "506",
+      "bns_section": "351(2)",
+      "heading": "Punishment for criminal intimidation",
+      "substantive_change": false
+    }
+  ]
+}
+

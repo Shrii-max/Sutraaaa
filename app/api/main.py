@@ -7,7 +7,8 @@ and append-only audit trails.
 import os
 from contextlib import asynccontextmanager
 from typing import List, Optional
-from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, status
+from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, status, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -28,13 +29,14 @@ from app.api.routers.documents import router as documents_router
 from app.api.routers.facts import router as facts_router
 from app.api.routers.research import router as research_router
 from app.api.routers.audit import router as audit_router
+from app.api.routers.contradictions import router as contradictions_router
+from app.api.routers.voice import router as voice_router
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Optionally initialize database schema if enabled by env."""
     if os.getenv("AUTO_INIT_DB", "false").lower() == "true":
         try:
             init_db()
@@ -50,6 +52,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Attach CORS middleware for HTTP client access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Attach audit and disclaimer middleware
 app.add_middleware(AuditAndDisclaimerMiddleware)
 
@@ -58,8 +69,18 @@ app.include_router(auth_router)
 app.include_router(cases_router)
 app.include_router(documents_router)
 app.include_router(facts_router)
+app.include_router(contradictions_router)
+app.include_router(voice_router)
 app.include_router(research_router)
 app.include_router(audit_router)
+app.include_router(research_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(cases_router, prefix="/api/v1")
+app.include_router(documents_router, prefix="/api/v1")
+app.include_router(facts_router, prefix="/api/v1")
+app.include_router(contradictions_router, prefix="/api/v1")
+app.include_router(voice_router, prefix="/api/v1")
+app.include_router(audit_router, prefix="/api/v1")
 
 
 # ---------------------------------------------------------
@@ -282,8 +303,9 @@ def seed_precedents(
     )
 
 
-@app.get("/api/v1/cases")
-def list_cases(
+@app.get("/api/v1/precedents")
+@app.get("/precedents")
+def list_precedents(
     limit: int = 20,
     db: Session = Depends(get_db),
 ):
@@ -326,3 +348,39 @@ def verify_audit_integrity():
         "hash_chain_status": "INTACT" if is_valid else "CORRUPTED_OR_TAMPERED",
         "disclaimer": settings.DISCLAIMER_TEXT,
     }
+
+
+# ---------------------------------------------------------
+# Static Frontend Mounting (SUTRA UI)
+# ---------------------------------------------------------
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+_dist_path = Path(__file__).resolve().parents[4] / "SUTRA da UIUX" / "dist"
+if _dist_path.exists():
+    if (_dist_path / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_dist_path / "assets")), name="static-assets")
+
+    @app.middleware("http")
+    async def spa_fallback_middleware(request: Request, call_next):
+        accept = request.headers.get("accept", "")
+        path = request.url.path
+        if (
+            request.method == "GET"
+            and "text/html" in accept
+            and not path.startswith(("/api", "/auth", "/docs", "/openapi.json", "/redoc", "/assets"))
+            and not (_dist_path / path.lstrip("/")).is_file()
+        ):
+            return FileResponse(_dist_path / "index.html")
+        return await call_next(request)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        # Don't intercept API or docs routes
+        if full_path.startswith(("api/", "auth/", "docs", "openapi.json", "redoc")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file_path = _dist_path / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(_dist_path / "index.html")

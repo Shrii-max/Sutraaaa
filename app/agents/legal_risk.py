@@ -91,6 +91,20 @@ class LegalRiskAgent(BaseAgent[RiskAnalysisInput, RiskAnalysisOutput]):
                     )
                 )
 
+        if input_data.timeline_analysis and getattr(input_data.timeline_analysis, "has_limitation_risk", False):
+            if not any("limitation" in r.statutory_provision.lower() for r in risk_items):
+                coa = getattr(input_data.timeline_analysis, "cause_of_action_identified", None) or "earliest date"
+                risk_items.append(
+                    LegalRiskItem(
+                        risk_id=f"RISK-{len(risk_items) + 1:03d}",
+                        category="LIMITATION_BAR",
+                        severity="HIGH",
+                        statutory_provision="Limitation Act, 1963",
+                        issue_description=f"Action appears barred by statutory limitation from cause of action date ({coa}).",
+                        mitigation_strategy="File formal Application for Condonation of Delay under Section 5 Limitation Act with sufficient cause affidavit.",
+                    )
+                )
+
         has_high_risk = any(r.severity == "HIGH" for r in risk_items)
         if has_high_risk:
             review_needed = True

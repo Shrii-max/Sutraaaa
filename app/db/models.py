@@ -104,6 +104,11 @@ class CaseModel(Base):
     title = Column(String(255), nullable=False)
     court = Column(String(150), nullable=True)
     status = Column(String(50), default="open")
+    # DPDP Compliance fields
+    dpdp_purpose = Column(Text, default="Legal Defense & Case Preparation")
+    retention_until = Column(DateTime(timezone=True), nullable=True)
+    is_crypto_shredded = Column(Boolean, default=False)
+    shredded_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     user = relationship("UserModel", back_populates="cases")
@@ -149,9 +154,21 @@ class DocumentPageModel(Base):
     confidence = Column(Float, default=1.0)
     language = Column(String(50), default="en")
     script = Column(String(50), default="Latin")
+    # OCR v2 & Visual Evidence Markers
+    raw_image_enc_path = Column(Text, nullable=True)
+    has_handwriting = Column(Boolean, default=False)
+    has_stamp = Column(Boolean, default=False)
+    has_signature = Column(Boolean, default=False)
+    word_confidences_json = Column(Text, nullable=True)
+    is_corrected = Column(Boolean, default=False)
+    corrected_text = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     document = relationship("DocumentModel", back_populates="pages")
+
+
+# Alias for backward compatibility
+DocumentPage = DocumentPageModel
 
 
 class DocumentChunkModel(Base):
@@ -182,6 +199,11 @@ class FactModel(Base):
     item_data = Column(Text, nullable=False)  # JSON serialized data
     source_ref = Column(Text, nullable=False)  # JSON serialized SourceRef
     confidence = Column(Float, default=1.0)
+    # Fact Verification & NLI Entailment
+    entailment_status = Column(String(32), default="supports")  # supports, contradicts, insufficient
+    verifier_confidence = Column(Float, default=1.0)
+    verifier_reason = Column(Text, nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
     is_reviewed = Column(Boolean, default=False)
     reviewed_by = Column(String(36), nullable=True)
     review_action = Column(String(50), nullable=True)  # approved, corrected, rejected
@@ -256,6 +278,12 @@ class ContradictionModel(Base):
     source_b = Column(Text, nullable=False)  # JSON serialized SourceRef
     severity = Column(String(30), default="MEDIUM")
     confidence = Column(Float, default=0.85)
+    # 3-Vote LLM Jury & Feedback
+    jury_votes_contradict = Column(Integer, default=0)
+    jury_votes_consistent = Column(Integer, default=0)
+    jury_votes_unclear = Column(Integer, default=0)
+    lawyer_verdict = Column(String(32), nullable=True)  # ACCEPTED, REJECTED, IGNORED
+    lawyer_feedback_notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     case = relationship("CaseModel", back_populates="contradictions")
@@ -295,6 +323,10 @@ class Judgment(Base):
     summary = Column(Text, nullable=True)
     ratio_decidendi = Column(Text, nullable=True)
     full_text = Column(Text, nullable=True)
+    # Provenance, Licensing & Overruled Law Metadata
+    license_note = Column(Text, nullable=True)
+    is_overruled = Column(Boolean, default=False, index=True)
+    overruled_by_citation = Column(String(150), nullable=True)
     embedding = Column(AdaptiveVector(EMBED_DIM), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -412,3 +444,56 @@ def block_audit_log_update(mapper, connection, target):
 @event.listens_for(AuditLogModel, "before_delete")
 def block_audit_log_delete(mapper, connection, target):
     raise PermissionError("audit_logs table is append-only: DELETE operations are strictly prohibited.")
+
+
+class IngestionQuarantineModel(Base):
+    """Quarantine store for malformed judgments, statutes, or invalid legal records."""
+    __tablename__ = "ingestion_quarantined_records"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_file = Column(String(255), nullable=False)
+    record_type = Column(String(50), nullable=False)  # judgment, statute
+    raw_payload = Column(Text, nullable=False)
+    validation_errors = Column(Text, nullable=False)  # JSON list of validation error strings
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class DocumentTranslationModel(Base):
+    """Cache and persistent store for multilingual document and summary translations."""
+    __tablename__ = "document_translations"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    document_id = Column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=True, index=True)
+    case_id = Column(String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=True, index=True)
+    content_hash = Column(String(64), nullable=False, index=True)
+    source_language = Column(String(20), default="en", nullable=False)
+    target_language = Column(String(20), nullable=False, index=True)
+    translation_type = Column(String(50), default="document", nullable=False)  # document, summary
+    translated_text = Column(Text, nullable=False)
+    alignments_json = Column(Text, nullable=True)  # JSON serialized list of SentenceAlignment
+    issues_json = Column(Text, default="[]", nullable=False)
+    confidence = Column(Float, default=0.90)
+    needs_human_review = Column(Boolean, default=False)
+    disclaimer = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class VoiceBriefModel(Base):
+    """Spoken audio briefs generated for advocates."""
+    __tablename__ = "voice_briefs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    case_id = Column(String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    depth = Column(String(20), default="2min", nullable=False)
+    language = Column(String(20), default="en", nullable=False)
+    spoken_script = Column(Text, nullable=False)
+    audio_path = Column(String(255), nullable=True)  # stored only when VOICE_STORE_AUDIO=true
+    duration_estimate_sec = Column(Integer, default=120)
+    source_refs = Column(Text, default="[]", nullable=False)  # JSON list of SourceRef
+    confidence = Column(Float, default=1.0)
+    needs_human_review = Column(Boolean, default=False)
+    disclaimer = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+

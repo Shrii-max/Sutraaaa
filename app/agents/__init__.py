@@ -26,6 +26,8 @@ from app.agents.precedent import PrecedentAnalysisAgent
 from app.agents.similar_case import SimilarCaseAgent
 from app.agents.legal_research import LegalResearchAgent
 from app.agents.legal_risk import LegalRiskAgent
+from app.agents.translation import TranslationAgent
+from app.agents.voice_brief import VoiceBriefAgent, VoiceQAAgent
 
 __all__ = [
     "BaseAgent",
@@ -55,4 +57,7 @@ __all__ = [
     "SimilarCaseAgent",
     "LegalResearchAgent",
     "LegalRiskAgent",
+    "TranslationAgent",
+    "VoiceBriefAgent",
+    "VoiceQAAgent",
 ]

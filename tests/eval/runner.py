@@ -311,6 +311,12 @@ class EvaluationHarness:
         return "\n".join(lines)
 
 
+def run_eval_suite(dataset_path: Optional[Path] = None, db_session=None) -> Dict[str, Any]:
+    """Top-level helper to execute evaluation harness and return metrics dict."""
+    harness = EvaluationHarness(dataset_path=dataset_path, db_session=db_session)
+    return harness.run_benchmark()
+
+
 if __name__ == "__main__":
     harness = EvaluationHarness()
     report = harness.run_benchmark()
@@ -324,3 +330,4 @@ if __name__ == "__main__":
     print(f"Hallucinated Citation Rate: {report['hallucinated_citation_rate'] * 100:.1f}% (Must be 0.0%)")
     print("=" * 60)
     print("Detailed report written to: tests/eval/eval_report.md\n")
+

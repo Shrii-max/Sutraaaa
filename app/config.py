@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     )
 
     # Local Embedding endpoint & model
+    EMBEDDING_BASE_URL: str = Field(
+        default="http://localhost:11434/v1",
+        description="Base URL for local embedding endpoint.",
+    )
     EMBED_MODEL: str = Field(
         default="BAAI/bge-m3",
         validation_alias=AliasChoices("EMBED_MODEL", "EMBEDDING_MODEL"),
@@ -41,9 +45,17 @@ class Settings(BaseSettings):
         description="Embedding vector dimension (e.g. 1024 for bge-m3).",
     )
 
+    @property
+    def EMBEDDING_MODEL(self) -> str:
+        return self.EMBED_MODEL
+
+    @property
+    def EMBEDDING_DIM(self) -> int:
+        return self.EMBED_DIM
+
     # Database
     DB_URL: str = Field(
-        default="postgresql+psycopg://lexagent:lexagent_secret@localhost:5432/lexagent_db",
+        default="sqlite:///demo_lexagent.db",
         validation_alias=AliasChoices("DB_URL", "DATABASE_URL"),
         description="SQLAlchemy database URL.",
     )
@@ -89,6 +101,132 @@ class Settings(BaseSettings):
     PII_MASKING_ENABLED: bool = Field(
         default=True,
         description="Enable automatic redaction of Aadhaar, PAN, and phone numbers in logs and audit.",
+    )
+
+    # =========================================================================
+    # v2 Upgrade Settings: Model Routing, OCR v2, Contradiction Jury & DPDP
+    # =========================================================================
+    TASK_MODEL_EXTRACTION: str = Field(
+        default="qwen2.5:14b-instruct",
+        description="Model designated for complex multi-lingual fact extraction.",
+    )
+    TASK_MODEL_JUDGE: str = Field(
+        default="qwen2.5:14b-instruct",
+        description="Model designated for contradiction jury & legal verification.",
+    )
+    TASK_MODEL_SUMMARY: str = Field(
+        default="qwen2.5:14b-instruct",
+        description="Model designated for document and case summarization.",
+    )
+    TASK_MODEL_TRANSLATE: str = Field(
+        default="qwen2.5:14b-instruct",
+        description="Fallback local LLM model for translation tasks.",
+    )
+    TASK_MODEL_ESCALATION: str = Field(
+        default="deepseek-r1:14b",
+        description="Larger or reasoning local model escalated to when confidence is low.",
+    )
+    MODEL_ESCALATION_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="Confidence threshold below which extraction/reasoning escalates to ESCALATION_MODEL.",
+    )
+
+    # OCR v2 & Computer Vision Settings
+    OCR_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.82,
+        ge=0.0,
+        le=1.0,
+        description="Page OCR confidence threshold gating downstream trust.",
+    )
+    OCR_PREPROCESS_IMAGE: bool = Field(
+        default=True,
+        description="Apply deskew, denoise, contrast adjustment, and binarization before OCR.",
+    )
+    OCR_SECONDARY_ENGINE: str = Field(
+        default="paddleocr",
+        description="Secondary OCR engine used for agreement voting on low confidence pages.",
+    )
+
+    # Fact Verification & Contradiction Settings
+    FACT_VERIFIER_STRICTNESS: str = Field(
+        default="high",
+        description="NLI entailment strictness (high, medium, low).",
+    )
+    CONTRADICTION_SIMILARITY_THRESHOLD: float = Field(
+        default=0.82,
+        ge=0.0,
+        le=1.0,
+        description="Cosine similarity threshold for contradiction candidate pairs.",
+    )
+    CONTRADICTION_JURY_VOTES: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="Number of independent LLM votes in the contradiction jury.",
+    )
+    CONTRADICTION_MIN_CONSENSUS: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Minimum majority votes required to confirm a contradiction.",
+    )
+
+    # Retrieval & Data Hardening
+    RETRIEVAL_SCORE_FLOOR: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description="Minimum hybrid retrieval score required for precedent candidate chunks.",
+    )
+    MAPPINGS_DIR: str = Field(
+        default="./data/mappings",
+        description="Path to statutory concordance mapping JSON files (IPC-BNS, CrPC-BNSS).",
+    )
+
+    # Security, KMS & DPDP Compliance
+    KMS_PROVIDER: str = Field(
+        default="local_envelope",
+        description="KMS provider implementation ('local_envelope', 'env').",
+    )
+    ENABLE_PROMPT_INJECTION_SCANNER: bool = Field(
+        default=True,
+        description="Scan document text for prompt injection / jailbreak patterns before LLM ingestion.",
+    )
+    DPDP_RETENTION_DAYS: int = Field(
+        default=365,
+        description="Configurable DPDP case data retention period in days.",
+    )
+    DPDP_ENABLE_CRYPTO_SHRED: bool = Field(
+        default=True,
+        description="Enable cryptographic shredding of document vault blobs and DB rows upon erasure.",
+    )
+
+    # Multilingual & Voice Settings
+    TRANSLATION_ENGINE: str = Field(
+        default="local_llm",
+        description="Translation engine provider ('local_llm', 'indictrans2', 'nllb').",
+    )
+    TRANSLATION_BACKCHECK_THRESHOLD: float = Field(
+        default=0.75,
+        description="Minimum back-translation similarity score before flagging needs_human_review.",
+    )
+    VOICEFLOW_BASE_URL: str = Field(
+        default="http://localhost:8080",
+        description="Base URL for external VoiceFlow speech synthesis and transcription microservice.",
+    )
+    VOICEFLOW_API_KEY: str = Field(
+        default="vf_local_secret_key_12345",
+        description="API token for VoiceFlow gateway communication.",
+    )
+    VOICEFLOW_VOICE_ID: str = Field(
+        default="hi-IN-Standard-A",
+        description="Default voice profile identifier for speech output.",
+    )
+    VOICE_STORE_AUDIO: bool = Field(
+        default=False,
+        description="Persist synthesized speech audio files to disk (default False: ephemeral RAM only).",
     )
 
     # Backward-compatible properties

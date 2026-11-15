@@ -367,10 +367,13 @@ class ValidationAgent(BaseAgent[ValidationInput, ValidationReport]):
 
     @staticmethod
     def _find_first_occurrence(doc_id: str, text: str, snippet: str) -> List[SourceRef]:
+        clean_text = text if text and len(text) > 0 else "[Document text empty]"
         s = snippet.strip()
         if not s:
-            s = text[:50]
-        loc = text.find(s)
-        if loc != -1:
+            s = clean_text[:min(len(clean_text), 50)]
+        loc = clean_text.find(s)
+        if loc != -1 and len(s) > 0:
             return [SourceRef(document_id=doc_id, page=1, char_start=loc, char_end=loc + len(s), snippet=s)]
-        return [SourceRef(document_id=doc_id, page=1, char_start=0, char_end=min(len(text), 30), snippet=text[:min(len(text), 30)])]
+        end_idx = max(1, min(len(clean_text), 30))
+        fallback_snip = clean_text[:end_idx] if clean_text[:end_idx] else "Notice"
+        return [SourceRef(document_id=doc_id, page=1, char_start=0, char_end=max(1, len(fallback_snip)), snippet=fallback_snip)]

@@ -478,7 +478,7 @@ class LimitationTimelineAgent(BaseAgent[TimelineAnalysisInput, TimelineAnalysisO
         timeline_events: List[TimelineEvent] = []
         fact_by_id = {f.fact_id: f for f in input_data.facts}
 
-        for idx, ev in enumerate(llm_response.events):
+        for idx, ev in enumerate(getattr(llm_response, "events", []) or []):
             ref_fact_id = ev.get("fact_id")
             source = None
             if ref_fact_id and ref_fact_id in fact_by_id:
@@ -498,8 +498,27 @@ class LimitationTimelineAgent(BaseAgent[TimelineAnalysisInput, TimelineAnalysisO
                     )
                 )
 
+        # Deterministic chronological event construction if LLM did not provide events
+        if not timeline_events and input_data.facts:
+            for idx, f in enumerate(input_data.facts):
+                d_str = getattr(f, "date_mentioned", None) or "Undated"
+                is_coa = idx == 0 or "incident" in (getattr(f, "category", "") or "").lower()
+                timeline_events.append(
+                    TimelineEvent(
+                        event_id=getattr(f, "fact_id", f"EV-{idx+1:03d}"),
+                        date_str=d_str,
+                        event_title=getattr(f, "category", "Legal Event"),
+                        description=getattr(f, "statement", ""),
+                        is_cause_of_action=is_coa,
+                        source=f.source,
+                    )
+                )
+
         limitation_checks: List[LimitationCheck] = []
-        for lim in llm_response.limitation_assessments:
+        has_risk = getattr(llm_response, "has_limitation_risk", False) or False
+        coa_identified = getattr(llm_response, "cause_of_action_identified", None)
+
+        for lim in getattr(llm_response, "limitation_assessments", []) or []:
             try:
                 check = LimitationCheck(
                     statute=lim.get("statute", "Limitation Act 1963"),
@@ -515,12 +534,47 @@ class LimitationTimelineAgent(BaseAgent[TimelineAnalysisInput, TimelineAnalysisO
             except Exception:
                 continue
 
+        # Deterministic Limitation Act 1963 assessment if not generated
+        if not limitation_checks and timeline_events:
+            coa_event = next((e for e in timeline_events if e.is_cause_of_action and e.date_str != "Undated"), None)
+            if not coa_event:
+                coa_event = next((e for e in timeline_events if e.date_str != "Undated"), None)
+
+            if coa_event:
+                norm_iso, dt_obj = normalize_legal_date(coa_event.date_str)
+                if not coa_identified:
+                    coa_identified = norm_iso or coa_event.date_str
+                if dt_obj:
+                    from datetime import datetime, timedelta
+                    expiry_dt = dt_obj + timedelta(days=3 * 365)
+                    now_dt = datetime.now()
+                    is_barred = now_dt > expiry_dt
+                    delay_days = (now_dt - expiry_dt).days if is_barred else 0
+                    if is_barred:
+                        has_risk = True
+                    limitation_checks.append(
+                        LimitationCheck(
+                            statute="Limitation Act 1963",
+                            section_or_article="Article 55 (Breach of Contract / Civil Wrong)",
+                            prescribed_period="3 years from cause of action",
+                            cause_of_action_date=norm_iso or coa_event.date_str,
+                            limitation_expiry_date=expiry_dt.strftime("%Y-%m-%d"),
+                            is_time_barred=is_barred,
+                            delay_condonation_applicable=True,
+                            legal_basis=(
+                                f"Limitation period of 3 years under Limitation Act 1963 computed from {norm_iso or coa_event.date_str}. "
+                                f"{f'Action is time-barred by {delay_days} days; Section 5 condonation application required.' if is_barred else 'Action is within statutory limitation.'}"
+                            ),
+                        )
+                    )
+
+        reported_conf = float(getattr(llm_response, "confidence", 0.85) or 0.85)
         return TimelineAnalysisOutput(
             document_id=input_data.document_id,
             events_chronological=timeline_events,
-            cause_of_action_identified=llm_response.cause_of_action_identified,
+            cause_of_action_identified=coa_identified,
             limitation_assessments=limitation_checks,
-            has_limitation_risk=llm_response.has_limitation_risk,
-            confidence=llm_response.confidence,
-            needs_human_review=review_needed or llm_response.has_limitation_risk,
+            has_limitation_risk=has_risk,
+            confidence=round(reported_conf, 2),
+            needs_human_review=review_needed or has_risk,
         )

@@ -148,6 +148,10 @@ class SimilarCaseAgent(BaseAgent[SimilarCaseInput, SimilarCaseOutput]):
                 f"Statutory sections overlap: {', '.join(overlap) if overlap else 'Common statutory domain'}; "
                 f"Procedural outcome: {judgment_db.outcome or 'Adjudicated'}."
             )
+            if getattr(judgment_db, "is_overruled", False):
+                overruled_cite = getattr(judgment_db, "overruled_by_citation", None)
+                warning_suffix = f" [WARNING: Precedent ratio marked OVERRULED{f' by {overruled_cite}' if overruled_cite else ''}. Exercise caution.]"
+                why_desc += warning_suffix
 
             # Optional LLM Grounded Summary
             summary_text = None

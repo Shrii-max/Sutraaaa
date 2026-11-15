@@ -846,10 +846,12 @@ class ProcessingOrchestrator:
             timeline_res = self.timeline_agent.run(inp_tl)
             for ev in timeline_res.events:
                 s_ref_dict = ev.source.model_dump() if ev.source else {}
+                t_date = ev.normalized_date or getattr(ev, "date_str", getattr(ev, "raw_date", "Unknown"))
+                t_title = getattr(ev, "event_title", getattr(ev, "title", "Legal Event"))
                 t_event = TimelineEventModel(
                     case_id=case_id,
-                    event_date=ev.normalized_date or ev.raw_date,
-                    title=ev.title,
+                    event_date=t_date,
+                    title=t_title,
                     description=ev.description,
                     is_important=(ev.importance == "HIGH"),
                     source_ref=json.dumps(s_ref_dict),

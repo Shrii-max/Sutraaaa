@@ -27,6 +27,13 @@ from app.schemas.facts import (
 )
 from app.ingestion.devanagari import normalize_devanagari_text, detect_language_mix
 from app.security.guardrails import wrap_as_document_data, format_safe_system_prompt
+from app.agents.deterministic_extractors import (
+    extract_dates_deterministic,
+    extract_sections_deterministic,
+    check_chronological_order,
+    check_fuzzy_name_variants,
+)
+from app.llm.router import ModelRouter, TaskType
 
 
 class _CandidateFactItem(BaseModel):
@@ -115,6 +122,12 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
         )
 
         # ------------------------------------------------------------------
+        # Deterministic Rule-First Extraction (Dates & Statutory Sections)
+        # ------------------------------------------------------------------
+        det_dates = extract_dates_deterministic(page_text_map, input_data.document_id)
+        det_sections = extract_sections_deterministic(page_text_map, input_data.document_id)
+
+        # ------------------------------------------------------------------
         # Anti-Hallucination Provenance Verification Layer
         # ------------------------------------------------------------------
         rejected_count = 0
@@ -183,6 +196,13 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
             if src and d.date_str:
                 verified_dates.append(DateItem(date_str=d.date_str, description=d.description or "Date mentioned", source=src, confidence=d.confidence))
 
+        # Merge deterministic dates
+        existing_date_keys = {d.date_str for d in verified_dates}
+        for dd in det_dates:
+            if dd.date_str not in existing_date_keys:
+                verified_dates.append(dd)
+                existing_date_keys.add(dd.date_str)
+
         verified_sections: List[SectionItem] = []
         for s in raw_payload.sections:
             src = verify_and_build_source(s)
@@ -199,6 +219,13 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
                 else:
                     act_norm = "other"
                 verified_sections.append(SectionItem(act=act_norm, section_number=s.section_number, description=s.description or "Statutory section", source=src, confidence=s.confidence))
+
+        # Merge deterministic sections
+        existing_sec_keys = {(s.act, s.section_number) for s in verified_sections}
+        for ds in det_sections:
+            if (ds.act, ds.section_number) not in existing_sec_keys:
+                verified_sections.append(ds)
+                existing_sec_keys.add((ds.act, ds.section_number))
 
         verified_amounts: List[AmountItem] = []
         for a in raw_payload.amounts:

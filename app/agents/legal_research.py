@@ -26,6 +26,7 @@ from app.schemas.research import (
     LegalResearchInput,
     LegalResearchOutput,
 )
+from app.retrieval.constitution import lookup_articles
 from app.retrieval.hybrid import HybridRetriever, RetrievalFilter, RetrievedChunk
 from app.llm.client import LLMClient, Embedder, LocalEmbeddingClient
 
@@ -67,6 +68,23 @@ class LegalResearchAgent(BaseAgent[LegalResearchInput, LegalResearchOutput]):
     def _execute(self, input_data: LegalResearchInput) -> LegalResearchOutput:
         query = input_data.query.strip()
         citations: List[ResearchCitation] = []
+
+        act_filter = (input_data.act_filter or "").strip().casefold()
+        if input_data.include_statutes and (not act_filter or "constitution" in act_filter):
+            constitution = lookup_articles(query, input_data.top_k)
+            if constitution:
+                return LegalResearchOutput(
+                    query=query,
+                    answer="\n\n".join(
+                        f"{item.citation_or_section} (PDF page {item.pdf_page})\n"
+                        f"{item.verbatim_snippet}" for item in constitution
+                    ),
+                    citations=constitution,
+                    confidence=1.0,
+                    needs_human_review=False,
+                    audit_notes="Returned matching text from the local Constitution archive.",
+                )
+
 
         # ---------------------------------------------------------------------
         # 1. Retrieve Judgment Chunks

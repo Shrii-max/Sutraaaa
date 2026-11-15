@@ -14,10 +14,20 @@ from sqlalchemy import select
 from app.db.models import (
     CaseModel,
     DocumentModel,
+    DocumentPage as DocumentPageModel,
+    DocumentTranslationModel,
     FactModel,
     ValidationIssueModel,
     SummaryModel,
     ProcessingStepModel,
+)
+from app.agents.translation import TranslationAgent
+from app.schemas.translation import (
+    TranslationInput,
+    TranslatedDocument,
+    TranslatedPage,
+    SentenceAlignment,
+    TranslationIssue,
 )
 from app.security.crypto import encrypt_file
 from app.security.guardrails import validate_file_upload, mask_pii
@@ -319,4 +329,267 @@ class DocumentManager:
             "correction_data": correction_data,
             "disclaimer": self.settings.DISCLAIMER_TEXT,
         }
+
+    def get_ocr_inspection(self, document_id: str, page_number: int, user_id: str, is_admin: bool = False) -> Dict[str, Any]:
+        """Retrieve page image thumbnail and OCR text for side-by-side inspection."""
+        from app.db.models import DocumentPageModel
+        doc = self.session.get(DocumentModel, document_id)
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document '{document_id}' not found.")
+        self._verify_document_access(doc, user_id, is_admin)
+
+        page_stmt = select(DocumentPageModel).where(
+            DocumentPageModel.document_id == document_id,
+            DocumentPageModel.page_number == page_number,
+        )
+        page = self.session.scalar(page_stmt)
+        if not page:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Page {page_number} not found for document '{document_id}'.")
+
+        word_confs = []
+        if page.word_confidences_json:
+            try:
+                word_confs = json.loads(page.word_confidences_json)
+            except Exception:
+                pass
+
+        # Generate lightweight placeholder image if none stored
+        img_b64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+        return {
+            "document_id": document_id,
+            "page_number": page.page_number,
+            "text": page.text,
+            "confidence": page.confidence,
+            "has_handwriting": getattr(page, "has_handwriting", False),
+            "has_stamp": getattr(page, "has_stamp", False),
+            "has_signature": getattr(page, "has_signature", False),
+            "word_confidences": word_confs,
+            "is_corrected": getattr(page, "is_corrected", False),
+            "corrected_text": getattr(page, "corrected_text", None),
+            "image_base64": img_b64,
+            "needs_review": page.confidence < self.settings.OCR_CONFIDENCE_THRESHOLD,
+            "disclaimer": self.settings.DISCLAIMER_TEXT,
+        }
+
+    def correct_ocr_text(
+        self,
+        document_id: str,
+        page_number: int,
+        corrected_text: str,
+        user_id: str,
+        retrigger: bool = True,
+        is_admin: bool = False,
+    ) -> Dict[str, Any]:
+        """Advocate correction of OCR errors; re-triggers downstream fact extraction."""
+        from app.db.models import DocumentPageModel
+        doc = self.session.get(DocumentModel, document_id)
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document '{document_id}' not found.")
+        self._verify_document_access(doc, user_id, is_admin)
+
+        page_stmt = select(DocumentPageModel).where(
+            DocumentPageModel.document_id == document_id,
+            DocumentPageModel.page_number == page_number,
+        )
+        page = self.session.scalar(page_stmt)
+        if not page:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Page {page_number} not found.")
+
+        old_text = page.text
+        page.text = corrected_text
+        page.corrected_text = corrected_text
+        page.is_corrected = True
+        page.confidence = 1.0  # Advocate confirmed
+        self.session.commit()
+
+        record_audit_event(
+            event_type="OCR_CORRECTION",
+            actor=f"user:{user_id}",
+            resource_id=f"{document_id}#p{page_number}",
+            input_payload={"old_len": len(old_text), "new_len": len(corrected_text)},
+            output_payload={"status": "corrected", "page": page_number},
+            confidence=1.0,
+            needs_human_review=False,
+            status="SUCCESS",
+        )
+
+        if retrigger:
+            try:
+                orchestrator = ProcessingOrchestrator(self.session)
+                orchestrator.process_document(document_id=document_id)
+            except Exception as e:
+                pass
+
+        return {
+            "document_id": document_id,
+            "page_number": page_number,
+            "status": "corrected",
+            "is_corrected": True,
+            "retriggered": retrigger,
+            "disclaimer": self.settings.DISCLAIMER_TEXT,
+        }
+
+    def translate_document(
+        self,
+        document_id: str,
+        target_language: str,
+        user_id: str,
+        source_language: str = "en",
+        is_admin: bool = False,
+    ) -> TranslatedDocument:
+        """Translate all pages of a document preserving sentence-level SourceRef provenance."""
+        stmt = select(DocumentModel).where(DocumentModel.id == document_id)
+        doc = self.session.scalar(stmt)
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{document_id}' not found.",
+            )
+
+        self._verify_document_access(doc, user_id, is_admin)
+
+        # Collect page texts in order
+        page_stmt = (
+            select(DocumentPageModel)
+            .where(DocumentPageModel.document_id == document_id)
+            .order_by(DocumentPageModel.page_number.asc())
+        )
+        pages = list(self.session.scalars(page_stmt))
+
+        pages_data = []
+        if pages:
+            for p in pages:
+                txt = p.corrected_text if p.is_corrected and p.corrected_text else p.text
+                pages_data.append({"page_number": p.page_number, "text": txt})
+        else:
+            pages_data = [{"page_number": 1, "text": ""}]
+
+        agent = TranslationAgent()
+        inp = TranslationInput(
+            document_id=document_id,
+            case_id=doc.case_id,
+            pages_data=pages_data,
+            source_language=source_language,
+            target_language=target_language,
+            preserve_glossary=True,
+            verify_backtranslation=True,
+        )
+        result = agent.run(inp)
+
+        # Persist to document_translations table
+        alignments_list = []
+        for p in result.pages:
+            for al in p.alignments:
+                alignments_list.append(al.model_dump())
+
+        issues_list = [iss.model_dump() for iss in result.issues]
+
+        record = DocumentTranslationModel(
+            document_id=doc.id,
+            case_id=doc.case_id,
+            content_hash=result.content_hash or hashlib.sha256(result.full_translated_text.encode()).hexdigest(),
+            source_language=source_language,
+            target_language=target_language,
+            translation_type="document",
+            translated_text=result.full_translated_text,
+            alignments_json=json.dumps(alignments_list, ensure_ascii=False),
+            issues_json=json.dumps(issues_list, ensure_ascii=False),
+            confidence=result.confidence,
+            needs_human_review=result.needs_human_review,
+            disclaimer=result.disclaimer,
+        )
+        self.session.add(record)
+        self.session.commit()
+
+        return result
+
+    def get_document_translation(
+        self,
+        document_id: str,
+        target_language: str,
+        user_id: str,
+        is_admin: bool = False,
+    ) -> TranslatedDocument:
+        """Fetch previously computed translation for a document in a target language."""
+        stmt = select(DocumentModel).where(DocumentModel.id == document_id)
+        doc = self.session.scalar(stmt)
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{document_id}' not found.",
+            )
+
+        self._verify_document_access(doc, user_id, is_admin)
+
+        trans_stmt = (
+            select(DocumentTranslationModel)
+            .where(
+                DocumentTranslationModel.document_id == document_id,
+                DocumentTranslationModel.target_language == target_language.lower(),
+                DocumentTranslationModel.translation_type == "document",
+            )
+            .order_by(DocumentTranslationModel.created_at.desc())
+        )
+        record = self.session.scalars(trans_stmt).first()
+        if not record:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No translation found for document '{document_id}' in language '{target_language}'.",
+            )
+
+        # Reconstruct TranslatedDocument
+        alignments_data = json.loads(record.alignments_json) if record.alignments_json else []
+        issues_data = json.loads(record.issues_json) if record.issues_json else []
+
+        # Group alignments by page
+        page_alignments_map: Dict[int, List[SentenceAlignment]] = {}
+        for item in alignments_data:
+            al = SentenceAlignment.model_validate(item)
+            p_num = al.source_ref.page
+            if p_num not in page_alignments_map:
+                page_alignments_map[p_num] = []
+            page_alignments_map[p_num].append(al)
+
+        # Build pages
+        pages = []
+        if page_alignments_map:
+            for p_num in sorted(page_alignments_map.keys()):
+                als = page_alignments_map[p_num]
+                s_text = " ".join([a.source_sentence for a in als])
+                t_text = " ".join([a.target_sentence for a in als])
+                pages.append(
+                    TranslatedPage(
+                        page_number=p_num,
+                        source_text=s_text,
+                        translated_text=t_text,
+                        alignments=als,
+                    )
+                )
+        else:
+            pages.append(
+                TranslatedPage(
+                    page_number=1,
+                    source_text="",
+                    translated_text=record.translated_text,
+                    alignments=[],
+                )
+            )
+
+        issues = [TranslationIssue.model_validate(iss) for iss in issues_data]
+
+        return TranslatedDocument(
+            document_id=document_id,
+            source_language=record.source_language,
+            target_language=record.target_language,
+            pages=pages,
+            full_translated_text=record.translated_text,
+            issues=issues,
+            content_hash=record.content_hash,
+            confidence=record.confidence or 0.90,
+            needs_human_review=record.needs_human_review or False,
+            disclaimer=record.disclaimer,
+        )
+
+
 

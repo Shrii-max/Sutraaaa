@@ -15,24 +15,140 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.security.crypto import encrypt_file
 from app.db.models import Base, CaseModel, DocumentModel
-from app.ingestion.judgments import load_judgments_from_jsonl, ingest_judgments
-from app.ingestion.statutes import load_statutes_from_jsonl, ingest_statutes
+from app.ingestion.judgments import load_judgments_from_jsonl, ingest_judgment_items
+from app.ingestion.statutes import load_statutes_from_jsonl, ingest_statute_items
 from app.orchestrator.graph import ProcessingOrchestrator
 from app.services.case_manager import CaseManager
+from app.llm.client import FakeLLMClient, FakeEmbedder, get_llm_client
 from app.config import get_settings
 
 ROOT_DIR = Path(__file__).parent.parent
 FIXTURES_DIR = ROOT_DIR / "tests" / "fixtures"
 
 
+def is_llm_reachable(base_url: str) -> bool:
+    """Quick probe to check if local Ollama/vLLM server is active."""
+    import httpx
+    try:
+        r = httpx.get(f"{base_url.rstrip('/')}/models", timeout=1.0)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 def run_demo():
     print("=" * 80)
     print("LEXAGENT: LOCAL MULTI-AGENT LEGAL DOCUMENT INTELLIGENCE SYSTEM")
     print("=" * 80)
-    print("Initializing isolated local demonstration environment...\n")
 
     settings = get_settings()
+    llm_online = is_llm_reachable(settings.LLM_BASE_URL)
+    if llm_online:
+        print(f"Connected to local LLM server at: {settings.LLM_BASE_URL} (Model: {settings.LLM_MODEL})")
+        demo_llm = None
+        demo_embedder = None
+    else:
+        print(f"Local LLM runtime not detected at {settings.LLM_BASE_URL}.")
+        print("Using high-fidelity deterministic offline LLM and BGE-M3 Embedder for demonstration.")
+        demo_llm = FakeLLMClient(
+            responses={
+                "ClassificationResultSchema": {
+                    "doc_type": "FIR",
+                    "purpose": "First Information Report lodged before Saket Court regarding criminal cheating and forgery.",
+                    "filing_party": "Vikramaditya Verma",
+                    "court_named": "Saket District Court, New Delhi",
+                    "relief_sought": "Registration of FIR and criminal proceedings",
+                },
+                "_RawExtractedFactsPayload": {
+                    "parties": [
+                        {
+                            "name": "Vikramaditya Verma",
+                            "role": "complainant",
+                            "snippet": "Name: Vikramaditya Verma, S/o Late Shri R. K. Verma",
+                            "page": 1,
+                            "confidence": 0.95,
+                        },
+                        {
+                            "name": "Rajeshwar Sharma",
+                            "role": "accused",
+                            "snippet": "Name: Rajeshwar Sharma, R/o Sector 21, Noida, Uttar Pradesh",
+                            "page": 1,
+                            "confidence": 0.95,
+                        },
+                    ],
+                    "dates": [
+                        {
+                            "date_str": "15-03-2023",
+                            "description": "FIR registration date",
+                            "snippet": "Date & Time: 15-03-2023 at 11:30 hrs",
+                            "page": 1,
+                            "confidence": 0.95,
+                        },
+                        {
+                            "date_str": "10-03-2023",
+                            "description": "Occurrence of offence",
+                            "snippet": "Date: 10-03-2023, Time: 14:30 hrs",
+                            "page": 1,
+                            "confidence": 0.95,
+                        },
+                    ],
+                    "sections": [
+                        {
+                            "act": "IPC",
+                            "section_number": "420",
+                            "snippet": "Section 420, Section 406 of the Indian Penal Code (IPC)",
+                            "page": 1,
+                            "confidence": 0.95,
+                        }
+                    ],
+                    "amounts": [
+                        {
+                            "value": 1500000.0,
+                            "currency": "INR",
+                            "context": "Misappropriated sum",
+                            "snippet": "Rs. 15,00,000 (Rupees Fifteen Lakhs)",
+                            "page": 1,
+                            "confidence": 0.95,
+                        }
+                    ],
+                    "statements": [
+                        {
+                            "statement_type": "complaint",
+                            "speaker": "Vikramaditya Verma",
+                            "role": "complainant",
+                            "recorded_on": "15-03-2023",
+                            "recorded_by": "Sub-Inspector Rakesh Nehra",
+                            "content": "Accused induced complainant to invest Rs 15 Lakhs on forged title deeds.",
+                            "snippet": "The complainant Vikramaditya Verma states that on 10-03-2023, the accused Rajeshwar Sharma fraudulently induced the complainant to invest an amount of Rs. 15,00,000",
+                            "page": 1,
+                            "confidence": 0.95,
+                        }
+                    ],
+                },
+                "_LLMValidationReview": {
+                    "logical_issues": [],
+                    "confidence": 0.92,
+                },
+                "_LLMSummaryPayload": {
+                    "summary_text": "FIR lodged by Vikramaditya Verma against Rajeshwar Sharma for cheating under Section 420/406 IPC involving misappropriation of Rs. 15,00,000 towards commercial property in Saket.",
+                    "key_points": [
+                        {
+                            "point": "Complainant transferred Rs. 15 Lakhs via RTGS for Saket property.",
+                            "snippet": "Rs. 15,00,000 (Rupees Fifteen Lakhs)",
+                            "page": 1,
+                        }
+                    ],
+                    "key_issues": ["Cheating under Section 420 IPC", "Criminal Breach of Trust under Section 406 IPC"],
+                    "relief_sought": "Investigation and recovery",
+                    "confidence": 0.92,
+                },
+            }
+        )
+        demo_embedder = FakeEmbedder(1024)
+
+    print("Initializing isolated local demonstration database...\n")
     engine = create_engine("sqlite:///demo_lexagent.db", echo=False)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -44,11 +160,11 @@ def run_demo():
     statutes_file = FIXTURES_DIR / "sample_statutes.jsonl"
 
     j_items = load_judgments_from_jsonl(judgments_file)
-    j_count, c_count = ingest_judgments(j_items, session=session)
+    j_count, c_count = ingest_judgment_items(j_items, session=session, embedder=demo_embedder)
     print(f"  -> Ingested {j_count} judicial judgments ({c_count} paragraph chunks).")
 
     s_items = load_statutes_from_jsonl(statutes_file)
-    s_count = ingest_statutes(s_items, session=session)
+    s_count = ingest_statute_items(s_items, session=session, embedder=demo_embedder)
     print(f"  -> Ingested {s_count} bare-act statutory sections.\n")
 
     # 2. Create Case File
@@ -73,12 +189,13 @@ def run_demo():
 
     for fname, desc in doc_files:
         fpath = FIXTURES_DIR / fname
-        content = fpath.read_bytes()
+        raw_bytes = fpath.read_bytes()
+        encrypted = encrypt_file(raw_bytes)
         doc = DocumentModel(
             case_id=case.id,
             filename=fname,
-            encrypted_content=content,
-            sha256_hash=str(hash(content)),
+            encrypted_content=encrypted,
+            sha256_hash=str(hash(raw_bytes)),
             status="pending",
         )
         session.add(doc)
@@ -88,7 +205,7 @@ def run_demo():
 
     # 4. Run LangGraph Multi-Agent Processing Pipeline
     print("[4/4] Executing LangGraph ProcessingOrchestrator across documents & case...")
-    orchestrator = ProcessingOrchestrator(db_session=session)
+    orchestrator = ProcessingOrchestrator(db_session=session, llm_client=demo_llm, embedder=demo_embedder)
     case_results = orchestrator.process_case(case.id)
 
     # 5. Display Synthesized Intelligence Output

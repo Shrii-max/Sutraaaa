@@ -27,10 +27,16 @@ class DocumentMeta(BaseModel):
 
 
 class PageOCR(BaseModel):
-    """Text and confidence extracted for a single page."""
+    """Text and confidence extracted for a single page with v2 visual indicators."""
     page_number: int = Field(..., ge=1)
     text: str = Field(..., description="Extracted textual content on this page")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Per-page OCR extraction confidence")
+    has_handwriting: bool = Field(default=False, description="Whether handwriting was detected on this page")
+    has_stamp: bool = Field(default=False, description="Whether an official seal or rubber stamp was detected")
+    has_signature: bool = Field(default=False, description="Whether advocate or judicial signature was detected")
+    word_confidences: List[dict] = Field(default_factory=list, description="Per-word confidence breakdown")
+    needs_review: bool = Field(default=False, description="Whether page confidence is below threshold")
+    image_base64: Optional[str] = Field(default=None, description="Base64 encoded page thumbnail or preview")
 
 
 class OCRResult(BaseModel):
