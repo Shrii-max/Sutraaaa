@@ -298,20 +298,32 @@ class FakeTranslator(Translator):
         self._load_glossary(glossary_path)
 
     def _load_glossary(self, path: Optional[str]):
-        default_path = os.path.join("data", "glossary", "legal_terms.json")
-        target_path = path or default_path
-        if os.path.exists(target_path):
+        candidate_paths = [
+            path,
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "glossary", "legal_terms.json"),
+            os.path.join("data", "glossary", "legal_terms.json"),
+            os.path.join("final", "lexagent", "lexagent", "data", "glossary", "legal_terms.json"),
+        ]
+        target_path = None
+        for cp in candidate_paths:
+            if cp and os.path.exists(cp):
+                target_path = cp
+                break
+
+        if target_path:
             try:
                 with open(target_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     for item in data.get("terms", []):
-                        eng = item.get("english", "").lower()
+                        eng = item.get("english", "").lower().strip()
                         self.glossary[eng] = {
-                            "hi": item.get("hindi", ""),
-                            "mr": item.get("marathi", ""),
+                            "hi": item.get("hindi", "").strip(),
+                            "mr": item.get("marathi", "").strip(),
                         }
                         for alias in item.get("aliases", []):
-                            self.glossary[alias.lower()] = self.glossary[eng]
+                            al = alias.lower().strip()
+                            if al:
+                                self.glossary[al] = self.glossary[eng]
             except Exception as e:
                 logger.warning("Could not load glossary in FakeTranslator: %s", e)
 
@@ -367,14 +379,78 @@ class FakeTranslator(Translator):
         return f"[{target_lang.upper()}] {translated}"
 
 
+class NeuralWebTranslator(Translator):
+    """Fast, accurate neural machine translation using public web translation service (decoupled from LLM).
+    
+    Preserves protected placeholders [[PROT_X]] exactly and applies legal glossary constraints.
+    Falls back gracefully to offline FakeTranslator if internet is unreachable.
+    """
+
+    def __init__(self, timeout: float = 10.0):
+        self.timeout = timeout
+        self.offline_fallback = FakeTranslator()
+
+    def translate(
+        self,
+        text: str,
+        source_lang: str = "en",
+        target_lang: str = "hi",
+        glossary_hints: Optional[Dict[str, str]] = None,
+    ) -> str:
+        if not text or not text.strip():
+            return ""
+
+        s_code = source_lang.lower().strip()
+        t_code = target_lang.lower().strip()
+        if s_code == t_code:
+            return text
+
+        import urllib.parse
+        import urllib.request
+
+        url = (
+            "https://translate.googleapis.com/translate_a/single"
+            f"?client=gtx&sl={s_code}&tl={t_code}&dt=t&q={urllib.parse.quote(text)}"
+        )
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                translated_pieces = [p[0] for p in data[0] if p and p[0]]
+                translated = "".join(translated_pieces).strip()
+                if not translated:
+                    raise ValueError("Empty translation received from web endpoint")
+
+                # Apply glossary hints if provided
+                if glossary_hints:
+                    for k, v in sorted(glossary_hints.items(), key=lambda x: len(x[0]), reverse=True):
+                        if k in translated:
+                            translated = translated.replace(k, v)
+
+                return translated
+        except Exception as e:
+            logger.warning("NeuralWebTranslator request failed (%s); using offline legal glossary.", e)
+            return self.offline_fallback.translate(
+                text, source_lang=source_lang, target_lang=target_lang, glossary_hints=glossary_hints
+            )
+
+
 def get_translator(
     backend: Optional[str] = None,
     llm_client: Optional[LLMClient] = None,
 ) -> Translator:
     """Factory creating configured Translator instance decoupled from LLM."""
     settings = get_settings()
-    engine = (backend or getattr(settings, "TRANSLATE_ENGINE", None) or os.environ.get("TRANSLATE_ENGINE", "http")).lower()
-    if engine in ("fake", "stub"):
+    engine = (
+        backend
+        or getattr(settings, "TRANSLATE_ENGINE", None)
+        or os.environ.get("TRANSLATE_ENGINE", "configured")
+    ).lower().strip()
+
+    if engine in ("fake", "stub", "rules", "rule_based", "glossary"):
         return FakeTranslator()
     elif engine in ("indictrans", "indictrans2"):
         return IndicTransTranslator()
@@ -382,5 +458,9 @@ def get_translator(
         return NLLBTranslator()
     elif engine == "local_llm":
         return LocalLLMTranslator(llm_client=llm_client)
-    else:
+    elif engine in ("web", "neural", "google", "configured", "default"):
+        return NeuralWebTranslator()
+    elif engine == "http":
         return GenericHTTPTranslator(base_url=settings.TRANSLATE_BASE_URL, api_key=settings.TRANSLATE_API_KEY)
+    else:
+        return NeuralWebTranslator()

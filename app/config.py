@@ -205,9 +205,9 @@ class Settings(BaseSettings):
 
     # Multilingual & Translation Settings (Decoupled from LLM_BASE_URL)
     TRANSLATE_ENGINE: str = Field(
-        default="local_llm",
+        default="configured",
         validation_alias=AliasChoices("TRANSLATE_ENGINE", "TRANSLATION_ENGINE"),
-        description="Translation engine: 'http' (generic translation server), 'indictrans2', 'nllb', 'local_llm', or 'stub'.",
+        description="Translation engine: 'configured' (neural web), 'rules' (glossary), 'indictrans2', 'nllb', 'local_llm', or 'stub'.",
     )
     XAI_API_KEY: Optional[str] = Field(default=None, repr=False)
     XAI_TRANSLATION_MODEL: str = Field(default="grok-4.7")

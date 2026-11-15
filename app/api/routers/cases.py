@@ -417,6 +417,26 @@ def import_related_cases(
     return {**result, "imported_count": imported}
 
 
+@router.post("/{id}/similar-cases/official")
+def refresh_official_related_cases(
+    id: str,
+    payload: RelatedCaseArchiveRequest,
+    current_user: UserModel = Depends(require_lawyer),
+    db: Session = Depends(get_db),
+):
+    from app.services.official_judgments import search_and_save
+
+    manager = CaseManager(db)
+    is_admin = current_user.role == "admin"
+    case = manager.get_case(id, current_user.id, is_admin)
+    try:
+        imported = search_and_save(db, case.id, payload.topic)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Unable to read or save the official Supreme Court index.") from exc
+    return {**manager.get_similar_cases(case.id, current_user.id, is_admin), "imported_count": imported}
+
+
 @router.get("/{id}/dashboard")
 def get_case_dashboard(
     id: str,

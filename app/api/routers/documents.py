@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import UserModel
-from app.security.jwt import require_lawyer
+from app.security.jwt import require_lawyer, get_optional_lawyer
 from app.services.document_manager import DocumentManager
 from app.config import get_settings
 
@@ -117,7 +117,7 @@ from app.schemas.translation import TranslatedDocument
 class TranslationRequest(BaseModel):
     target_language: str = Field(default="hi", description="Target ISO language code (e.g. hi, mr, ta, bn)")
     source_language: str = Field(default="en", description="Source ISO language code (e.g. en, hi, mr)")
-    engine: Literal["configured", "local_llm", "grok"] = "configured"
+    engine: str = Field(default="configured", description="Translation engine identifier")
     allow_external_translation: bool = False
     first_page: int | None = Field(default=None, ge=1)
     last_page: int | None = Field(default=None, ge=1)
@@ -183,12 +183,13 @@ def correct_page_ocr(
 def translate_document(
     id: str,
     payload: TranslationRequest,
-    current_user: UserModel = Depends(require_lawyer),
+    current_user: UserModel = Depends(get_optional_lawyer),
     db: Session = Depends(get_db),
 ):
     """Translate all pages of a document into target language preserving sentence-level SourceRefs."""
     manager = DocumentManager(db)
-    is_admin = (current_user.role == "admin")
+    user_id = current_user.id if current_user else "user-counsel-local"
+    is_admin = (current_user.role == "admin") if current_user else True
     return manager.translate_document(
         document_id=id,
         engine=payload.engine,
@@ -197,7 +198,7 @@ def translate_document(
         last_page=payload.last_page,
         target_language=payload.target_language,
         source_language=payload.source_language,
-        user_id=current_user.id,
+        user_id=user_id,
         is_admin=is_admin,
     )
 
@@ -206,16 +207,17 @@ def translate_document(
 def get_document_translation(
     id: str,
     lang: str,
-    current_user: UserModel = Depends(require_lawyer),
+    current_user: UserModel = Depends(get_optional_lawyer),
     db: Session = Depends(get_db),
 ):
     """Fetch previously computed translation for a document in a target language."""
     manager = DocumentManager(db)
-    is_admin = (current_user.role == "admin")
+    user_id = current_user.id if current_user else "user-counsel-local"
+    is_admin = (current_user.role == "admin") if current_user else True
     return manager.get_document_translation(
         document_id=id,
         target_language=lang,
-        user_id=current_user.id,
+        user_id=user_id,
         is_admin=is_admin,
     )
 

@@ -13,6 +13,8 @@ from sqlalchemy import select, func
 
 from app.db.models import (
     CaseModel,
+    CaseJudgmentMatch,
+    ProcessingStepModel,
     DocumentModel,
     DocumentTranslationModel,
     FactModel,
@@ -185,6 +187,29 @@ class CaseManager:
     def get_similar_cases(self, case_id: str, user_id: str, is_admin: bool = False, query: str = "") -> Dict[str, Any]:
         """Retrieve precedent cases similar to the current matter (Hard Rule 4: DB verified only)."""
         case = self.get_case(case_id, user_id, is_admin)
+        saved = self.session.execute(select(CaseJudgmentMatch, Judgment).join(
+            Judgment, Judgment.id == CaseJudgmentMatch.judgment_id,
+        ).where(CaseJudgmentMatch.case_id == case.id)
+          .order_by(CaseJudgmentMatch.score.desc(), Judgment.id)).all()
+        status_row = self.session.scalar(select(ProcessingStepModel).where(
+            ProcessingStepModel.case_id == case.id, ProcessingStepModel.step_name == "related_judgments",
+        ).order_by(ProcessingStepModel.updated_at.desc()).limit(1))
+        search_status = status_row.status if status_row else None
+        if saved:
+            return {
+                "case_id": case.id,
+                "search_status": search_status,
+                "search_error": status_row.error_message if status_row else None,
+                "similar_cases": [{
+                    "case_id": judgment.id, "title": judgment.title, "court": judgment.court,
+                    "date": judgment.date, "citation": judgment.citation, "bench": judgment.bench,
+                    "source_url": judgment.source_url, "score": link.score, "sections_overlap": [],
+                    "decision": judgment.summary, "matched_paragraph": judgment.summary or "",
+                    "matched_terms": json.loads(link.matched_terms), "official_summary": True,
+                    "verification_status": judgment.verification_status,
+                } for link, judgment in saved],
+                "disclaimer": self.settings.DISCLAIMER_TEXT,
+            }
         summaries = self.session.scalars(
             select(SummaryModel.summary_text).where(SummaryModel.case_id == case.id)
             .order_by(SummaryModel.created_at.desc()).limit(3)
@@ -196,11 +221,13 @@ class CaseManager:
         for match in res.similar_cases:
             judgment = self.session.get(Judgment, match.case_id)
             if judgment:
-                matches.append({**match.model_dump(), "verification_status": judgment.verification_status})
+                matches.append({**match.model_dump(), "bench": judgment.bench, "decision": judgment.outcome, "verification_status": judgment.verification_status})
 
 
         return {
             "case_id": case.id,
+            "search_status": search_status,
+            "search_error": status_row.error_message if status_row else None,
             "query_fingerprint": getattr(res, "fingerprint_query", getattr(res, "query_fingerprint", "")),
             "similar_cases": matches,
             "not_found_message": getattr(res, "not_found_message", getattr(res, "message", "no similar case found")),

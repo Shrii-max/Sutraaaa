@@ -202,10 +202,12 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
         translated_text: str,
         source_lang: str,
         target_lang: str,
+        translator: Optional[Translator] = None,
     ) -> Tuple[float, Optional[str]]:
         """Back-translate to source language and compute semantic sequence similarity."""
+        t = translator or self.translator
         try:
-            back_translated = self.translator.translate(
+            back_translated = t.translate(
                 translated_text,
                 source_lang=target_lang,
                 target_lang=source_lang,
@@ -247,7 +249,48 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
         overall_confidences: List[float] = []
         needs_review = False
         full_text_pieces: List[str] = []
-        engine_name = getattr(self.translator, "__class__", type(self.translator)).__name__
+        active_translator = self.translator
+        engine_name = getattr(active_translator, "__class__", type(active_translator)).__name__
+        fallback_taken = False
+        audit_note = None
+
+        def safe_translate(masked_text: str, sent_text: str) -> str:
+            nonlocal active_translator, engine_name, fallback_taken, audit_note, needs_review
+            hints = self.get_glossary_hints(sent_text, target_lang) if input_data.preserve_glossary else None
+            try:
+                return active_translator.translate(
+                    masked_text, source_lang=source_lang, target_lang=target_lang, glossary_hints=hints
+                )
+            except Exception as exc:
+                if not fallback_taken:
+                    logger.warning("Primary translation engine '%s' failed: %s. Falling back to decoupled translator.", engine_name, exc)
+                    fallback_taken = True
+                    needs_review = True
+                    audit_note = f"Primary engine '{engine_name}' unreachable ({exc}); translated using decoupled fallback."
+                    all_issues.append(
+                        TranslationIssue(
+                            category="engine_fallback",
+                            severity="MEDIUM",
+                            description=audit_note,
+                        )
+                    )
+                    try:
+                        from app.llm.translator import NeuralWebTranslator
+                        active_translator = NeuralWebTranslator()
+                        return active_translator.translate(
+                            masked_text, source_lang=source_lang, target_lang=target_lang, glossary_hints=hints
+                        )
+                    except Exception:
+                        from app.llm.translator import FakeTranslator
+                        active_translator = FakeTranslator()
+                        return active_translator.translate(
+                            masked_text, source_lang=source_lang, target_lang=target_lang, glossary_hints=hints
+                        )
+                else:
+                    from app.llm.translator import FakeTranslator
+                    return FakeTranslator().translate(
+                        masked_text, source_lang=source_lang, target_lang=target_lang, glossary_hints=hints
+                    )
 
         try:
             for p_data in pages_to_process:
@@ -274,15 +317,15 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
                     if input_data.preserve_glossary:
                         for sent, *_ in masked_rows:
                             hints.update(self.get_glossary_hints(sent, target_lang))
-                    translated_segments = self.translator.translate_sentences(
-                        [row[3] for row in masked_rows], source_lang, target_lang, hints
-                    )
+                    try:
+                        translated_segments = active_translator.translate_sentences(
+                            [row[3] for row in masked_rows], source_lang, target_lang, hints
+                        )
+                    except Exception:
+                        translated_segments = [safe_translate(row[3], row[0]) for row in masked_rows]
                 else:
                     translated_segments = [
-                        self.translator.translate(
-                            masked, source_lang, target_lang,
-                            self.get_glossary_hints(sent, target_lang) if input_data.preserve_glossary else None,
-                        )
+                        safe_translate(masked, sent)
                         for sent, _, _, masked, _ in masked_rows
                     ]
 
@@ -330,6 +373,7 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
                         translated_text=page_full_trans,
                         source_lang=source_lang,
                         target_lang=target_lang,
+                        translator=active_translator,
                     )
                     if sim_ratio < 0.70:
                         page_conf = max(0.40, sim_ratio)
@@ -365,6 +409,19 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
             if final_conf < 0.75:
                 needs_review = True
 
+            final_status = "live_model"
+            if "fake" in engine_name.lower() or "rules" in engine_name.lower():
+                final_status = "rule_based"
+            elif fallback_taken:
+                final_status = "fallback"
+
+            logger.info(
+                "AGENT_EXECUTION agent=TranslationAgent engine=%s llm_called=%s fallback_taken=%s",
+                "rules" if ("fake" in engine_name.lower() or fallback_taken) else ("llm" if "llm" in engine_name.lower() else "rules"),
+                ("llm" in engine_name.lower() and not fallback_taken),
+                fallback_taken,
+            )
+
             result = TranslatedDocument(
                 document_id=doc_id,
                 source_language=source_lang,
@@ -372,14 +429,15 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
                 pages=translated_pages,
                 full_translated_text="\n\n".join(full_text_pieces),
                 confidence=round(final_conf, 3),
-                needs_human_review=needs_review,
+                needs_human_review=needs_review or fallback_taken,
                 issues=all_issues,
                 content_hash=cache_hash,
                 disclaimer="Machine translation, not an official court translation. For decision-support only.",
-                engine=engine_name,
-                llm_called="llm" in engine_name.lower(),
-                fallback_taken=False,
-                status="live_model" if "fake" not in engine_name.lower() else "rule_based",
+                engine=engine_name if not fallback_taken else "rules",
+                llm_called="llm" in engine_name.lower() and not fallback_taken,
+                fallback_taken=fallback_taken,
+                status=final_status,
+                audit_notes=audit_note,
             )
 
             self._cache[cache_hash] = result
@@ -428,13 +486,26 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
         masked, protected_map = self.mask_protected_tokens(summary_text)
         glossary_hints = self.get_glossary_hints(summary_text, target_lang)
 
-        # Translate
-        translated_masked = self.translator.translate(
-            masked,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            glossary_hints=glossary_hints,
-        )
+        # Translate with resilient fallback
+        try:
+            translated_masked = self.translator.translate(
+                masked,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                glossary_hints=glossary_hints,
+            )
+        except Exception as exc:
+            logger.warning("Summary translation failed (%s); falling back to decoupled translator.", exc)
+            try:
+                from app.llm.translator import NeuralWebTranslator
+                translated_masked = NeuralWebTranslator().translate(
+                    masked, source_lang=source_lang, target_lang=target_lang, glossary_hints=glossary_hints
+                )
+            except Exception:
+                from app.llm.translator import FakeTranslator
+                translated_masked = FakeTranslator().translate(
+                    masked, source_lang=source_lang, target_lang=target_lang, glossary_hints=glossary_hints
+                )
 
         # Restore
         restored, missing_tokens = self.restore_protected_tokens(

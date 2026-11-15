@@ -189,6 +189,19 @@ class DocumentManager:
             orchestrator._record_step(document_id, case_id, "case_analysis", status="failed",
                                       error="Timeline or contradiction analysis failed. Retry from the case timeline.")
 
+        from app.services.official_judgments import search_and_save
+
+        try:
+            orchestrator._record_step(document_id, case_id, "related_judgments", status="running")
+            count = search_and_save(session, case_id)
+            orchestrator._record_step(document_id, case_id, "related_judgments", status="done",
+                                      payload={"matches": count, "engine": "official_sci_index"})
+        except Exception:
+            session.rollback()
+            logger.exception("Official court search failed for case %s", case_id)
+            orchestrator._record_step(document_id, case_id, "related_judgments", status="failed",
+                                      error="The official Supreme Court index could not be searched. Retry in Similar Cases.")
+
     def get_status(self, document_id: str, user_id: str, is_admin: bool = False) -> Dict[str, Any]:
         """Retrieve execution and lifecycle status for a document."""
         doc = self.session.get(DocumentModel, document_id)

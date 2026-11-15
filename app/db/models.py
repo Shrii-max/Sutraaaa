@@ -368,6 +368,16 @@ class Judgment(Base):
 PrecedentCaseModel = Judgment
 
 
+class CaseJudgmentMatch(Base):
+    """Saved relationship between a workspace case and a public judgment."""
+    __tablename__ = "case_judgment_matches"
+
+    case_id = Column(String(36), ForeignKey("cases.id", ondelete="CASCADE"), primary_key=True)
+    judgment_id = Column(String(36), ForeignKey("judgments.id", ondelete="CASCADE"), primary_key=True)
+    score = Column(Float, nullable=False)
+    matched_terms = Column(Text, nullable=False)
+
+
 class JudgmentChunk(Base):
     """Chunks of judgments with pgvector embedding, tsvector column, GIN index, and HNSW index."""
     __tablename__ = "judgment_chunks"
