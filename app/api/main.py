@@ -24,6 +24,7 @@ from app.security.audit import AuditLogger, record_audit_event
 from app.schemas.dossier import LegalIntelligenceReport
 from app.llm.embedding import get_embedding_client
 from app.api.routers.auth import router as auth_router
+from app.api.routers.assistant import router as assistant_router
 from app.api.routers.cases import router as cases_router
 from app.api.routers.documents import router as documents_router
 from app.api.routers.facts import router as facts_router
@@ -37,12 +38,24 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+    import logging
+
+    recovery = None
     if os.getenv("AUTO_INIT_DB", "false").lower() == "true":
         try:
+            from app.db.session import get_engine
+            from app.services.document_manager import DocumentManager
+
             init_db()
+            recovery = asyncio.create_task(asyncio.to_thread(DocumentManager.drain_pending_jobs, get_engine()))
         except Exception:
-            pass
-    yield
+            logging.getLogger(__name__).exception("Could not initialize LexAgent document job recovery.")
+    try:
+        yield
+    finally:
+        if recovery is not None:
+            await recovery
 
 
 app = FastAPI(
@@ -75,6 +88,7 @@ app.include_router(research_router)
 app.include_router(audit_router)
 app.include_router(research_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(assistant_router, prefix="/api/v1")
 app.include_router(cases_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
 app.include_router(facts_router, prefix="/api/v1")

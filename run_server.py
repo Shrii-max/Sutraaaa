@@ -40,6 +40,30 @@ def ensure_seeded_database():
     with factory() as session:
         j_count = session.query(Judgment).count()
         s_count = session.query(StatuteSection).count()
+
+        if s_count == 0 or j_count == 0:
+            demo_db_path = PROJECT_ROOT / "demo_lexagent.db"
+            if demo_db_path.exists():
+                import sqlite3
+                src = sqlite3.connect(demo_db_path)
+                dst = sqlite3.connect(LIVE_DB)
+                for table in ["statute_sections", "judgments", "judgment_chunks"]:
+                    cur_src = src.cursor()
+                    cur_dst = dst.cursor()
+                    cur_src.execute(f"SELECT * FROM {table}")
+                    rows = cur_src.fetchall()
+                    if rows:
+                        cols = [d[0] for d in cur_src.description]
+                        placeholders = ",".join(["?"] * len(cols))
+                        col_names = ",".join(cols)
+                        cur_dst.executemany(f"INSERT OR IGNORE INTO {table} ({col_names}) VALUES ({placeholders})", rows)
+                        dst.commit()
+                src.close()
+                dst.close()
+                print("[+] Seeded reference Bare-Act Statutes & Landmark Precedents into live database.")
+
+        j_count = session.query(Judgment).count()
+        s_count = session.query(StatuteSection).count()
         u_count = session.query(UserModel).count()
 
         # Seed Sutra advocate user only if DEMO_MODE is true

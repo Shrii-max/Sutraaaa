@@ -393,8 +393,7 @@ class ProcessingOrchestrator:
             rec.fallback_taken = fallback_taken
             if serialized_payload is not None:
                 rec.state_payload = serialized_payload
-            if error:
-                rec.error_message = error
+            rec.error_message = error
         else:
             rec = ProcessingStepModel(
                 document_id=document_id,
@@ -431,7 +430,10 @@ class ProcessingOrchestrator:
             self._record_step(document_id, case_id, step_name, status="running", attempt=attempt)
             try:
                 res = fn(*args, **kwargs)
-                self._record_step(document_id, case_id, step_name, status="done", attempt=attempt, payload=res)
+                fallback = res.get("fallback_taken") if isinstance(res, dict) else getattr(res, "fallback_taken", False)
+                details = res.get("error_message") if isinstance(res, dict) else getattr(res, "error_message", None)
+                self._record_step(document_id, case_id, step_name, status="done", attempt=attempt, payload=res,
+                                  error=details or ("Model response unavailable. Rule-based results need review." if fallback else None))
                 record_audit_event(
                     event_type=f"STEP_{step_name.upper()}",
                     actor="orchestrator:ProcessingOrchestrator",
@@ -524,7 +526,8 @@ class ProcessingOrchestrator:
 
     def _fact_extraction_node(self, state: DocumentProcessingState) -> DocumentProcessingState:
         doc_id = state["document_id"]
-        full_text = state.get("raw_text", "")
+        pages = state.get("ocr_result", {}).get("pages", [])
+        full_text = "\f".join(page["text"] for page in pages) if pages else state.get("raw_text", "")
 
         def _do_facts():
             inp = DocumentExtractionInput(
@@ -810,8 +813,14 @@ class ProcessingOrchestrator:
             doc.status = "running"
             self.session.commit()
 
-        final_state = self.graph.invoke(initial_state)
-        return final_state
+        try:
+            return self.graph.invoke(initial_state)
+        except Exception:
+            self.session.rollback()
+            if doc:
+                doc.status = "failed"
+                self.session.commit()
+            raise
 
     def resume_document_processing(self, document_id: str) -> DocumentProcessingState:
         """Resume document processing from last successful step after a crash."""
@@ -847,73 +856,63 @@ class ProcessingOrchestrator:
                 self.session.commit()
                 doc_results[doc.id] = {"status": "failed", "error": str(e)}
 
-        # ---------------------------------------------------------------------
-        # Case-Level Synthesis: Timeline, Contradictions, and Similar Cases
-        # ---------------------------------------------------------------------
-        # 1. Timeline
-        timeline_res = None
+        result = self.refresh_case_analysis(case_id)
+        result["document_results"] = doc_results
+        result["similar_cases_count"] = 0
         try:
-            inp_tl = TimelineInput(case_id=case_id, db_session=self.session)
-            timeline_res = self.timeline_agent.run(inp_tl)
-            for ev in timeline_res.events:
-                s_ref_dict = ev.source.model_dump() if ev.source else {}
-                t_date = ev.normalized_date or getattr(ev, "date_str", getattr(ev, "raw_date", "Unknown"))
-                t_title = getattr(ev, "event_title", getattr(ev, "title", "Legal Event"))
-                t_event = TimelineEventModel(
-                    case_id=case_id,
-                    event_date=t_date,
-                    title=t_title,
-                    description=ev.description,
-                    is_important=(ev.importance == "HIGH"),
-                    source_ref=json.dumps(s_ref_dict),
-                    confidence=ev.confidence,
-                )
-                self.session.add(t_event)
-            self.session.commit()
-            self._record_step("case-level", case_id, "timeline", status="done")
-        except Exception as e:
-            logger.error("Case-level timeline failed for case %s: %s", case_id, str(e))
-
-        # 2. Contradictions
-        contradiction_res = None
-        try:
-            inp_ct = ContradictionInput(case_id=case_id, db_session=self.session)
-            contradiction_res = self.contradiction_agent.run(inp_ct)
-            for c in contradiction_res.contradictions:
-                sa = c.source_a.model_dump() if c.source_a else {}
-                sb = c.source_b.model_dump() if c.source_b else {}
-                c_mod = ContradictionModel(
-                    case_id=case_id,
-                    statement_a=c.statement_a,
-                    statement_b=c.statement_b,
-                    description=c.reason,
-                    source_a=json.dumps(sa),
-                    source_b=json.dumps(sb),
-                    severity=c.severity,
-                    confidence=c.confidence,
-                )
-                self.session.add(c_mod)
-            self.session.commit()
-            self._record_step("case-level", case_id, "contradiction", status="done")
-        except Exception as e:
-            logger.error("Case-level contradiction failed for case %s: %s", case_id, str(e))
-
-        # 3. Similar Cases (Hard Rule 4: zero hallucination, DB-verified only)
-        similar_cases_res = None
-        try:
-            inp_sc = SimilarCaseInput(case_id=case_id, db_session=self.session)
-            similar_cases_res = self.similar_case_agent.run(inp_sc)
+            similar = self.similar_case_agent.run(SimilarCaseInput(case_id=case_id, db_session=self.session))
+            result["similar_cases_count"] = len(similar.similar_cases)
             self._record_step("case-level", case_id, "similar_case", status="done")
-        except Exception as e:
-            logger.error("Case-level similar cases failed for case %s: %s", case_id, str(e))
+        except Exception:
+            self.session.rollback()
+            logger.exception("Case-level similar cases failed for case %s", case_id)
+        return result
 
+    def refresh_case_analysis(self, case_id: str) -> Dict[str, Any]:
+        """Rebuild case analysis from persisted facts and document pages."""
+        timeline = self.timeline_agent.run(TimelineInput(case_id=case_id, db_session=self.session))
+        existing_events = self.session.scalars(
+            select(TimelineEventModel).where(TimelineEventModel.case_id == case_id)
+        ).all()
+        event_keys = {(row.event_date, row.title, row.description, row.source_ref) for row in existing_events}
+        for event in timeline.events:
+            source = json.dumps(event.source.model_dump() if event.source else {})
+            date = event.normalized_date or getattr(event, "date_str", None) or getattr(event, "raw_date", "Unknown")
+            title = getattr(event, "event_title", getattr(event, "title", "Legal Event"))
+            key = (date, title, event.description, source)
+            if key in event_keys:
+                continue
+            event_keys.add(key)
+            self.session.add(TimelineEventModel(
+                case_id=case_id, event_date=date, title=title,
+                description=event.description, source_ref=source,
+                is_important=event.importance == "HIGH", confidence=event.confidence,
+            ))
+
+        self.session.commit()
+        contradictions = self.contradiction_agent.run(
+            ContradictionInput(case_id=case_id, db_session=self.session)
+        )
+        existing_conflicts = self.session.scalars(
+            select(ContradictionModel).where(ContradictionModel.case_id == case_id)
+        ).all()
+        conflict_keys = {(row.statement_a, row.statement_b, row.source_a, row.source_b) for row in existing_conflicts}
+        for conflict in contradictions.contradictions:
+            source_a = json.dumps(conflict.source_a.model_dump())
+            source_b = json.dumps(conflict.source_b.model_dump())
+            key = (conflict.statement_a, conflict.statement_b, source_a, source_b)
+            if key in conflict_keys:
+                continue
+            conflict_keys.add(key)
+            self.session.add(ContradictionModel(
+                case_id=case_id, statement_a=conflict.statement_a, statement_b=conflict.statement_b,
+                description=conflict.description, source_a=source_a, source_b=source_b,
+                severity=conflict.severity, confidence=conflict.confidence,
+            ))
+        self.session.commit()
         return {
             "case_id": case_id,
-            "document_results": doc_results,
-            "timeline_events_count": len(timeline_res.events) if timeline_res else 0,
-            "contradictions_count": len(contradiction_res.contradictions) if contradiction_res else 0,
-            "similar_cases_count": len(similar_cases_res.similar_cases) if similar_cases_res else 0,
+            "timeline_events_count": len(event_keys),
+            "contradictions_count": len(conflict_keys),
             "disclaimer": self.settings.DISCLAIMER_TEXT,
         }
-
-

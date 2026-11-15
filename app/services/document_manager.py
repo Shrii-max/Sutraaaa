@@ -4,12 +4,13 @@ Handles secure upload with AES-256-GCM encryption, document processing execution
 fact review/correction workflows, and audit tracking.
 """
 
+import logging
 import hashlib
 import json
 from typing import Optional, Dict, Any, List
 from fastapi import HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db.models import (
     CaseModel,
@@ -29,11 +30,14 @@ from app.schemas.translation import (
     SentenceAlignment,
     TranslationIssue,
 )
-from app.security.crypto import encrypt_file
+from app.security.crypto import decrypt_file, encrypt_file
 from app.security.guardrails import validate_file_upload, mask_pii
 from app.security.audit import record_audit_event
 from app.config import get_settings
 from app.orchestrator.graph import ProcessingOrchestrator
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentManager:
@@ -108,24 +112,82 @@ class DocumentManager:
             status="SUCCESS",
         )
 
-        # Kick off processing pipeline
-        def _run_pipeline(doc_id: str, case_id_val: str, raw_content: bytes, fname: str):
-            orchestrator = ProcessingOrchestrator(db_session=self.session)
-            orchestrator.process_document(
-                document_id=doc_id,
-                file_bytes=raw_content,
-                filename=fname,
-                case_id=case_id_val,
-            )
-
-        if background_tasks:
-            background_tasks.add_task(_run_pipeline, doc.id, case.id, content, filename)
+        if background_tasks is not None:
+            background_tasks.add_task(self.run_document_job, self.session.get_bind(), doc.id)
         else:
-            # Synchronous processing if no background runner supplied
-            _run_pipeline(doc.id, case.id, content, filename)
+            self._process_saved_document(self.session, doc.id)
             self.session.refresh(doc)
 
         return doc
+
+    @staticmethod
+    def run_document_job(bind, document_id: str) -> None:
+        """Run a queued upload with a session owned by the background worker."""
+        with Session(bind=bind) as session:
+            claimed = session.execute(update(DocumentModel).where(
+                DocumentModel.id == document_id, DocumentModel.status == "pending",
+            ).values(status="running")).rowcount
+            session.commit()
+            if claimed:
+                DocumentManager._process_saved_document(session, document_id)
+
+    @staticmethod
+    def drain_pending_jobs(bind) -> None:
+        """Recover uploads committed before a backend shutdown."""
+        with Session(bind=bind) as session:
+            ids = session.scalars(select(DocumentModel.id).where(DocumentModel.status == "pending")).all()
+        for document_id in ids:
+            DocumentManager.run_document_job(bind, document_id)
+
+    def retry_document(self, document_id, user_id, is_admin, background_tasks):
+        doc = self.session.get(DocumentModel, document_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found.")
+        self._verify_document_access(doc, user_id, is_admin)
+        changed = self.session.execute(update(DocumentModel).where(
+            DocumentModel.id == doc.id, DocumentModel.status == "failed",
+        ).values(status="pending")).rowcount
+        if not changed:
+            raise HTTPException(status_code=409, detail="Only failed document jobs can be retried.")
+        self.session.commit()
+        background_tasks.add_task(self.run_document_job, self.session.get_bind(), document_id)
+        return {"document_id": document_id, "status": "pending", "disclaimer": self.settings.DISCLAIMER_TEXT}
+
+    @staticmethod
+    def _process_saved_document(session: Session, document_id: str) -> None:
+        doc = session.get(DocumentModel, document_id)
+        if doc is None:
+            return
+        case_id = doc.case_id
+        orchestrator = None
+        try:
+            orchestrator = ProcessingOrchestrator(db_session=session)
+            content = decrypt_file(doc.encrypted_content or b"")
+            orchestrator.process_document(
+                document_id=doc.id, file_bytes=content, filename=doc.filename, case_id=case_id,
+            )
+        except Exception:
+            session.rollback()
+            doc = session.get(DocumentModel, document_id)
+            if doc is not None:
+                doc.status = "failed"
+                session.commit()
+                if orchestrator is not None:
+                    orchestrator._record_step(document_id, case_id, "document_job", status="failed",
+                                              error="Document processing failed. Retry from the document status endpoint.")
+            logger.exception("Document job failed for %s", document_id)
+            return
+
+        if not case_id:
+            return
+        try:
+            orchestrator.refresh_case_analysis(case_id)
+            orchestrator._record_step(document_id, case_id, "case_analysis", status="done")
+        except Exception:
+            session.rollback()
+            logger.exception("Case analysis failed after document %s", document_id)
+            orchestrator._record_step(document_id, case_id, "case_analysis", status="failed",
+                                      error="Timeline or contradiction analysis failed. Retry from the case timeline.")
 
     def get_status(self, document_id: str, user_id: str, is_admin: bool = False) -> Dict[str, Any]:
         """Retrieve execution and lifecycle status for a document."""
@@ -153,6 +215,8 @@ class DocumentManager:
                     "step_name": s.step_name,
                     "status": s.status,
                     "attempt": s.attempt,
+                    "engine": s.engine,
+                    "fallback_taken": s.fallback_taken,
                     "error_message": s.error_message,
                     "updated_at": s.updated_at.isoformat() if s.updated_at else None,
                 }
@@ -437,6 +501,10 @@ class DocumentManager:
         user_id: str,
         source_language: str = "en",
         is_admin: bool = False,
+        engine: str = "configured",
+        allow_external_translation: bool = False,
+        first_page: int | None = None,
+        last_page: int | None = None,
     ) -> TranslatedDocument:
         """Translate all pages of a document preserving sentence-level SourceRef provenance."""
         stmt = select(DocumentModel).where(DocumentModel.id == document_id)
@@ -449,12 +517,33 @@ class DocumentManager:
 
         self._verify_document_access(doc, user_id, is_admin)
 
+        from app.llm.translator import GrokTranslator, TRANSLATION_LANGUAGES, get_translator
+
+        source_language = source_language.lower()
+        target_language = target_language.lower()
+        if engine == "grok":
+            if not allow_external_translation:
+                raise HTTPException(status_code=422, detail="Confirm sending extracted text to xAI before translating.")
+            if not self.settings.XAI_API_KEY:
+                raise HTTPException(status_code=503, detail="Set XAI_API_KEY on the LexAgent server to use Grok.")
+            if source_language not in TRANSLATION_LANGUAGES or target_language not in TRANSLATION_LANGUAGES:
+                raise HTTPException(status_code=422, detail="Unsupported translation language.")
+            translator = GrokTranslator(self.settings.XAI_API_KEY, self.settings.XAI_TRANSLATION_MODEL)
+        else:
+            translator = get_translator(backend=None if engine == "configured" else engine)
+
         # Collect page texts in order
         page_stmt = (
             select(DocumentPageModel)
             .where(DocumentPageModel.document_id == document_id)
             .order_by(DocumentPageModel.page_number.asc())
         )
+        if first_page is not None and last_page is not None and first_page > last_page:
+            raise HTTPException(status_code=422, detail="First page must be before or equal to last page.")
+        if first_page is not None:
+            page_stmt = page_stmt.where(DocumentPageModel.page_number >= first_page)
+        if last_page is not None:
+            page_stmt = page_stmt.where(DocumentPageModel.page_number <= last_page)
         pages = list(self.session.scalars(page_stmt))
 
         pages_data = []
@@ -462,10 +551,10 @@ class DocumentManager:
             for p in pages:
                 txt = p.corrected_text if p.is_corrected and p.corrected_text else p.text
                 pages_data.append({"page_number": p.page_number, "text": txt})
-        else:
-            pages_data = [{"page_number": 1, "text": ""}]
+        if not any(page["text"] and page["text"].strip() for page in pages_data):
+            raise HTTPException(status_code=409, detail="No extracted text is available for the selected pages.")
 
-        agent = TranslationAgent()
+        agent = TranslationAgent(translator=translator)
         inp = TranslationInput(
             document_id=document_id,
             case_id=doc.case_id,
@@ -473,9 +562,14 @@ class DocumentManager:
             source_language=source_language,
             target_language=target_language,
             preserve_glossary=True,
-            verify_backtranslation=True,
+            verify_backtranslation=engine != "grok",
         )
         result = agent.run(inp)
+
+        if engine == "grok":
+            result.needs_human_review = True
+        if result.status == "failed" or first_page is not None or last_page is not None:
+            return result
 
         # Persist to document_translations table
         alignments_list = []

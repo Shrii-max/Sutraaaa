@@ -182,16 +182,27 @@ class CaseManager:
             "disclaimer": self.settings.DISCLAIMER_TEXT,
         }
 
-    def get_similar_cases(self, case_id: str, user_id: str, is_admin: bool = False) -> Dict[str, Any]:
+    def get_similar_cases(self, case_id: str, user_id: str, is_admin: bool = False, query: str = "") -> Dict[str, Any]:
         """Retrieve precedent cases similar to the current matter (Hard Rule 4: DB verified only)."""
         case = self.get_case(case_id, user_id, is_admin)
+        summaries = self.session.scalars(
+            select(SummaryModel.summary_text).where(SummaryModel.case_id == case.id)
+            .order_by(SummaryModel.created_at.desc()).limit(3)
+        ).all()
+        query_text = query.strip() or " ".join(summaries) or case.title
         agent = SimilarCaseAgent(db_session=self.session)
-        res = agent.run(SimilarCaseInput(case_id=case.id, db_session=self.session))
+        res = agent.run(SimilarCaseInput(case_id=case.id, query_text=query_text[:8000], summarize_with_llm=False))
+        matches = []
+        for match in res.similar_cases:
+            judgment = self.session.get(Judgment, match.case_id)
+            if judgment:
+                matches.append({**match.model_dump(), "verification_status": judgment.verification_status})
+
 
         return {
             "case_id": case.id,
             "query_fingerprint": getattr(res, "fingerprint_query", getattr(res, "query_fingerprint", "")),
-            "similar_cases": [c.model_dump() for c in res.similar_cases],
+            "similar_cases": matches,
             "not_found_message": getattr(res, "not_found_message", getattr(res, "message", "no similar case found")),
             "disclaimer": self.settings.DISCLAIMER_TEXT,
         }

@@ -95,7 +95,7 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
         detected_lang = detect_language_mix(normalized_text)
 
         # Build page map (if form feed \x0c is present or single page)
-        raw_pages = normalized_text.split("\x0c") if "\x0c" in normalized_text else [normalized_text]
+        raw_pages = input_data.text_content.split("\x0c")
         page_text_map: Dict[int, str] = {idx + 1: p for idx, p in enumerate(raw_pages)}
 
         prompt = (

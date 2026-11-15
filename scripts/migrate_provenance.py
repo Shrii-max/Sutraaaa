@@ -94,3 +94,4 @@ def migrate_db(db_path: Path):
 if __name__ == "__main__":
     migrate_db(LEXAGENT_DIR / "demo_lexagent.db")
     migrate_db(LEXAGENT_DIR / "lexagent.db")
+

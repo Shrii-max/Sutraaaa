@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import UserModel
-from app.security.jwt import require_lawyer
+from app.security.jwt import require_lawyer, get_optional_lawyer
 from app.services.research_manager import ResearchManager
 from app.schemas.research import ResearchCitation
 from app.config import get_settings
@@ -41,7 +41,7 @@ class ResearchQueryResponse(BaseModel):
 @router.post("", response_model=ResearchQueryResponse)
 def conduct_legal_research(
     req: ResearchQueryRequest,
-    current_user: UserModel = Depends(require_lawyer),
+    current_user: UserModel = Depends(get_optional_lawyer),
     db: Session = Depends(get_db),
 ):
     """Execute grounded legal research over local judgments and bare-act statutes (Hard Rule 4: DB verified only)."""

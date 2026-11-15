@@ -7,7 +7,9 @@ Endpoints:
   GET /documents/{id}/validation
 """
 
-from fastapi import APIRouter, Depends
+from typing import Literal
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -18,6 +20,43 @@ from app.config import get_settings
 
 settings = get_settings()
 router = APIRouter(prefix="/documents", tags=["Document Intelligence"])
+
+
+@router.get("/{id}/pdf")
+def get_document_pdf(
+    id: str,
+    current_user: UserModel = Depends(require_lawyer),
+    db: Session = Depends(get_db),
+):
+    """Serve the original PDF to an authorized case owner."""
+    from app.db.models import DocumentModel
+    from app.security.crypto import decrypt_file
+
+    document = db.get(DocumentModel, id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    DocumentManager(db)._verify_document_access(document, current_user.id, current_user.role == "admin")
+    if not document.filename.lower().endswith(".pdf") or not document.encrypted_content:
+        raise HTTPException(status_code=404, detail="Original PDF is unavailable.")
+    try:
+        content = decrypt_file(document.encrypted_content)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="The saved PDF could not be decrypted.") from exc
+    if b"%PDF-" not in content[:1024]:
+        raise HTTPException(status_code=415, detail="Original document does not contain a PDF.")
+    return Response(content, media_type="application/pdf", headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
+
+
+@router.post("/{id}/retry", status_code=202)
+def retry_document(
+    id: str,
+    background_tasks: BackgroundTasks,
+    current_user: UserModel = Depends(require_lawyer),
+    db: Session = Depends(get_db),
+):
+    return DocumentManager(db).retry_document(id, current_user.id, current_user.role == "admin", background_tasks)
 
 
 @router.get("/{id}/status")
@@ -78,6 +117,10 @@ from app.schemas.translation import TranslatedDocument
 class TranslationRequest(BaseModel):
     target_language: str = Field(default="hi", description="Target ISO language code (e.g. hi, mr, ta, bn)")
     source_language: str = Field(default="en", description="Source ISO language code (e.g. en, hi, mr)")
+    engine: Literal["configured", "local_llm", "grok"] = "configured"
+    allow_external_translation: bool = False
+    first_page: int | None = Field(default=None, ge=1)
+    last_page: int | None = Field(default=None, ge=1)
 
 
 class OCRCorrectionRequest(BaseModel):
@@ -148,6 +191,10 @@ def translate_document(
     is_admin = (current_user.role == "admin")
     return manager.translate_document(
         document_id=id,
+        engine=payload.engine,
+        allow_external_translation=payload.allow_external_translation,
+        first_page=payload.first_page,
+        last_page=payload.last_page,
         target_language=payload.target_language,
         source_language=payload.source_language,
         user_id=current_user.id,

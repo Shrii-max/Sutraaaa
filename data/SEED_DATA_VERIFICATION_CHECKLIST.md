@@ -65,3 +65,4 @@ Until an Indian Advocate on Record or Senior Counsel reviews and signs off on th
        verified_by = 'Adv. <Bar_Enrollment_No>'
    WHERE act = 'IPC' AND section_no = '420';
    ```
+

@@ -85,9 +85,15 @@ class OpenAICompatClient(LLMClient):
         self.base_url = (base_url or settings.LLM_BASE_URL).rstrip("/")
         self.model = model or settings.LLM_MODEL
         self.timeout = timeout
+        self._unavailable = False
         self.client = httpx.Client(timeout=httpx.Timeout(timeout, connect=0.5))
 
-    def chat(self, messages: Union[List[Dict[str, str]], str], system: Optional[str] = None) -> str:
+    def chat(
+        self, messages: Union[List[Dict[str, str]], str], system: Optional[str] = None,
+        *, reasoning_effort: Optional[str] = None, max_tokens: Optional[int] = None,
+    ) -> str:
+        if self._unavailable:
+            raise httpx.ConnectError("The local model already failed during this processing run.")
         url = f"{self.base_url}/chat/completions"
         msg_payload = []
         if system:
@@ -104,10 +110,18 @@ class OpenAICompatClient(LLMClient):
             "temperature": get_settings().LLM_TEMPERATURE,
             "stream": False,
         }
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         headers = {"Content-Type": "application/json"}
 
-        response = self.client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
+        try:
+            response = self.client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+        except (httpx.NetworkError, httpx.TimeoutException):
+            self._unavailable = True
+            raise
         data = response.json()
         return data["choices"][0]["message"]["content"]
 
@@ -132,13 +146,13 @@ class OpenAICompatClient(LLMClient):
 
         for attempt in range(max_retries + 1):
             try:
-                raw = self.chat(current_prompt, system=current_system)
+                raw = self.chat(current_prompt, system=current_system, reasoning_effort="none", max_tokens=4096)
                 clean_json = extract_json_from_text(raw)
                 parsed = json.loads(clean_json)
                 return schema.model_validate(parsed)
             except (json.JSONDecodeError, ValidationError, Exception) as err:
                 last_error = str(err)
-                if isinstance(err, (httpx.ConnectError, httpx.NetworkError, httpx.TimeoutException, OSError)):
+                if isinstance(err, (httpx.ConnectError, httpx.NetworkError, httpx.TimeoutException, OSError)) or (isinstance(err, httpx.HTTPStatusError) and err.response.status_code in (404, 502, 503)):
                     logger.info("Local LLM server connection unavailable; proceeding to deterministic fallback.")
                     raise err
                 logger.warning(f"chat_json attempt {attempt + 1}/{max_retries + 1} failed: {err}")

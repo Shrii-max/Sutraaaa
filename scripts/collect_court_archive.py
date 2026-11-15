@@ -23,12 +23,13 @@ def field(html: str, label: str) -> str | None:
     return unescape(match[1]).strip() if match else None
 
 
-def collect(client: httpx.Client, session: Session, court: str, year: int, limit: int, refresh_metadata: bool = False) -> int:
+def collect(client: httpx.Client, session: Session, court: str, year: int, limit: int, refresh_metadata: bool = False, *, keywords: tuple[str, ...] = (), max_entries: int | None = None) -> int:
     bucket = f"https://indian-{court}-court-judgments.s3.ap-south-1.amazonaws.com/"
     prefix = f"metadata/json/year={year}/"
     parameters = {"list-type": 2, "prefix": prefix, "max-keys": 100}
     imported = 0
     failures = 0
+    inspected = 0
     while imported < limit:
         response = client.get(bucket + "?" + urlencode(parameters))
         response.raise_for_status()
@@ -37,6 +38,9 @@ def collect(client: httpx.Client, session: Session, court: str, year: int, limit
             key = element.findtext("{*}Key", "")
             if not key.endswith(".json"):
                 continue
+            if max_entries is not None and inspected >= max_entries:
+                return imported
+            inspected += 1
             identity = str(uuid.uuid5(uuid.NAMESPACE_URL, bucket + key))
             existing = session.get(Judgment, identity)
             if existing is not None and (existing.summary or not refresh_metadata):
@@ -51,6 +55,13 @@ def collect(client: httpx.Client, session: Session, court: str, year: int, limit
                 outcome = field(html, "Disposal Nature")
                 if not title or not date or not outcome:
                     continue
+                issue = re.search(
+                    r"""Issue for Consideration\s+(.*?)<br>\s*<strong class=['"]caseDetailsTD""",
+                    html, re.I | re.S,
+                )
+                searchable = unescape(re.sub(r"<[^>]+>", " ", f"{title[1]} {issue[1] if issue else ''}")).casefold()
+                if keywords and not any(re.search(r"\b" + re.escape(word) + r"\b", searchable) for word in keywords):
+                    continue
                 stem = key[:-5].removeprefix(prefix)
                 if court == "supreme":
                     pdf_key = f"data/pdf/year={year}/english/{stem}_EN.pdf"
@@ -64,10 +75,6 @@ def collect(client: httpx.Client, session: Session, court: str, year: int, limit
                 if len(text) < 15:
                     continue
                 citation = metadata.get("nc_display") or f"{court.upper()} archive {stem}"
-                issue = re.search(
-                    r"""Issue for Consideration\s+(.*?)<br>\s*<strong class=['"]caseDetailsTD""",
-                    html, re.I | re.S,
-                )
                 bench = field(html, "Bench")
                 item = JudgmentIngestItem(
                     id=identity, title=unescape(title[1]).strip(),

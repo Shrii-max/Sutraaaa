@@ -265,23 +265,28 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
                 page_alignments: List[SentenceAlignment] = []
                 page_trans_pieces: List[str] = []
 
-                for sent, s_start, s_end in sentence_tuples:
-                    # 1. Mask protected entities
-                    masked_sent, protected_map = self.mask_protected_tokens(sent)
-
-                    # 2. Extract glossary hints
-                    glossary_hints = None
+                masked_rows = [
+                    (sent, start, end, *self.mask_protected_tokens(sent))
+                    for sent, start, end in sentence_tuples
+                ]
+                if engine_name == "GrokTranslator":
+                    hints = {}
                     if input_data.preserve_glossary:
-                        glossary_hints = self.get_glossary_hints(sent, target_lang)
-
-                    # 3. Translate masked sentence
-                    translated_masked = self.translator.translate(
-                        masked_sent,
-                        source_lang=source_lang,
-                        target_lang=target_lang,
-                        glossary_hints=glossary_hints,
+                        for sent, *_ in masked_rows:
+                            hints.update(self.get_glossary_hints(sent, target_lang))
+                    translated_segments = self.translator.translate_sentences(
+                        [row[3] for row in masked_rows], source_lang, target_lang, hints
                     )
+                else:
+                    translated_segments = [
+                        self.translator.translate(
+                            masked, source_lang, target_lang,
+                            self.get_glossary_hints(sent, target_lang) if input_data.preserve_glossary else None,
+                        )
+                        for sent, _, _, masked, _ in masked_rows
+                    ]
 
+                for (sent, s_start, s_end, _, protected_map), translated_masked in zip(masked_rows, translated_segments, strict=True):
                     # 4. Restore protected entities
                     restored_sent, missing_tokens = self.restore_protected_tokens(
                         translated_masked, protected_map

@@ -211,8 +211,8 @@ def extract_parties_deterministic(
     seen = set()
 
     party_pattern = re.compile(
-        r"(?i)\b(Complainant|Accused|Petitioner|Respondent|Witness|Appellant|Defendant|Plaintiff|"
-        r"शिकायतकर्ता|अभियुक्त|वादी|प्रतिवादी|गवाह)\s*[:\-]\s*([^\n,;\.]{3,70})",
+        r"(?i)\b(Complainant|Accused|Petitioner|Claimant|Respondent|Witness|Appellant|Defendant|Plaintiff|"
+        r"शिकायतकर्ता|अभियुक्त|वादी|प्रतिवादी|गवाह)(?:[ \t]*[:\-][ \t]*|[ \t]+statement[ \t]*\r?\n[ \t]*)([^\n,;\.]{3,70})",
         re.UNICODE,
     )
 
@@ -227,6 +227,8 @@ def extract_parties_deterministic(
                 role = "complainant"
             elif r_lower in ["accused", "अभियुक्त"]:
                 role = "accused"
+            elif r_lower == "claimant":
+                role = "claimant"
             elif r_lower in ["petitioner", "वादी", "plaintiff"]:
                 role = "petitioner"
             elif r_lower in ["respondent", "प्रतिवादी", "defendant"]:
