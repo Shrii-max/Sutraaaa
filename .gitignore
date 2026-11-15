@@ -1,0 +1,23 @@
+# Python virtual environment
+venv/
+.venv/
+
+# Large translation models
+models/en-indic/
+models/indic-en/
+models/indic-indic/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment variables
+.env
+.env.*
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
