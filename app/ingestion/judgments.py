@@ -16,8 +16,9 @@ from typing import List, Optional, Tuple, Dict, Any, Union
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.db.models import Judgment, JudgmentChunk
+from app.db.models import Judgment, JudgmentChunk, IngestionQuarantineModel
 from app.llm.client import Embedder, LocalEmbeddingClient
+from app.ingestion.date_normalizer import normalize_legal_date
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,11 @@ class JudgmentIngestItem(BaseModel):
     bench: Optional[str] = None
     sections_cited: List[str] = Field(default_factory=list, description="Statutory sections cited in judgment")
     outcome: Optional[str] = Field(default=None, description="Disposal outcome: Allowed, Dismissed, Quashed, etc.")
+    summary: Optional[str] = None
     full_text: str = Field(..., min_length=10, description="Full verbatim text or substantive excerpt of judgment")
+    license_note: Optional[str] = Field(default="Public Domain Indian Judicial Record / Fair Dealing")
+    is_overruled: bool = Field(default=False, description="Flag indicating if the legal ratio has been overruled")
+    overruled_by_citation: Optional[str] = Field(default=None, description="Overruling citation if applicable")
 
 
 def approximate_token_count(text: str) -> int:
@@ -127,6 +132,31 @@ def ingest_judgment_items(
     total_chunks = 0
 
     for item in items:
+        # Strict Ingestion Validation
+        validation_errors = []
+        if not item.title or len(item.title.strip()) < 3:
+            validation_errors.append("Invalid or missing title.")
+        if not item.citation or len(item.citation.strip()) < 3:
+            validation_errors.append("Invalid or missing citation.")
+        if not item.full_text or len(item.full_text.strip()) < 15:
+            validation_errors.append("Empty or insufficient full text (must be >= 15 characters).")
+
+        norm_date, _ = normalize_legal_date(item.date)
+        if not norm_date:
+            validation_errors.append(f"Unparseable date string '{item.date}'.")
+
+        if validation_errors:
+            logger.warning(f"Quarantining invalid judgment record '{item.citation}': {validation_errors}")
+            quarantine = IngestionQuarantineModel(
+                source_file="judgments_ingest",
+                record_type="judgment",
+                raw_payload=item.model_dump_json() if hasattr(item, "model_dump_json") else str(item),
+                validation_errors=json.dumps(validation_errors),
+            )
+            session.add(quarantine)
+            session.flush()
+            continue
+
         # Check if judgment already exists by citation
         existing = session.query(Judgment).filter(Judgment.citation == item.citation.strip()).first()
         j_id = existing.id if existing else (item.id or str(uuid.uuid4()))
@@ -160,8 +190,13 @@ def ingest_judgment_items(
             existing.source_url = item.source_url
             existing.sections_cited = json.dumps(item.sections_cited)
             existing.outcome = item.outcome
+            if item.summary is not None:
+                existing.summary = item.summary
             existing.full_text = item.full_text
             existing.embedding = j_embedding
+            existing.license_note = getattr(item, "license_note", "Public Domain")
+            existing.is_overruled = getattr(item, "is_overruled", False)
+            existing.overruled_by_citation = getattr(item, "overruled_by_citation", None)
 
             # Idempotent replacement of chunks
             session.query(JudgmentChunk).filter(JudgmentChunk.judgment_id == existing.id).delete()
@@ -177,8 +212,12 @@ def ingest_judgment_items(
                 source_url=item.source_url,
                 sections_cited=json.dumps(item.sections_cited),
                 outcome=item.outcome,
+                summary=item.summary,
                 full_text=item.full_text,
                 embedding=j_embedding,
+                license_note=getattr(item, "license_note", "Public Domain"),
+                is_overruled=getattr(item, "is_overruled", False),
+                overruled_by_citation=getattr(item, "overruled_by_citation", None),
             )
             session.add(new_j)
             session.flush()

@@ -4,7 +4,7 @@ Follows Hard Rule 3: Every agent output carries confidence (0-1) and needs_human
 Follows Hard Rule 10: Output is decision-support for lawyers, never legal advice. Add a disclaimer field.
 """
 
-from typing import Optional
+from typing import Optional, Literal
 from pydantic import BaseModel, Field
 from app.config import get_settings
 
@@ -33,5 +33,25 @@ class BaseAgentOutput(BaseModel):
     audit_notes: Optional[str] = Field(
         default=None,
         description="Reasoning trail or warning notes recorded during agent execution",
+    )
+    engine: str = Field(
+        default="rules",
+        description="Engine actually used: regex | rules | llm | nli | embedder | tesseract | pymupdf | tts",
+    )
+    llm_called: bool = Field(
+        default=False,
+        description="Whether an LLM model was invoked during this agent run",
+    )
+    fallback_taken: bool = Field(
+        default=False,
+        description="Whether fallback logic was taken due to service unavailability or failure",
+    )
+    status: Literal["live_model", "rule_based", "fallback", "failed", "needs_review"] = Field(
+        default="rule_based",
+        description="Honest operational status of this agent output",
+    )
+    error_message: Optional[str] = Field(
+        default=None,
+        description="Explicit error explanation if the engine or model was unreachable",
     )
 

@@ -6,10 +6,13 @@ Follows Requirement:
 """
 
 import re
+import logging
 from typing import List, Optional
 from app.schemas.document import OCRResult, PageOCR, PageLanguage, LanguageResult
 from app.ingestion.devanagari import normalize_devanagari_text
 from app.security.audit import record_audit_event
+
+logger = logging.getLogger(__name__)
 
 # Unicode script ranges
 UNICODE_SCRIPTS = {
@@ -117,10 +120,19 @@ class LanguageDetectionAgent:
 
         primary = max(lang_counts.items(), key=lambda x: x[1])[0] if lang_counts else "english"
 
+        # Required structured log line
+        logger.info("AGENT_EXECUTION: agent=LanguageDetectionAgent engine=rules llm_called=False fallback_taken=False")
+
         result = LanguageResult(
             document_id=ocr_result.document_id,
             pages=page_results,
             primary_language=primary,
+            engine="rules",
+            llm_called=False,
+            fallback_taken=False,
+            status="rule_based",
+            confidence=0.98,
+            needs_human_review=False,
         )
 
         record_audit_event(
@@ -128,7 +140,7 @@ class LanguageDetectionAgent:
             actor=f"agent:{self.agent_name}",
             resource_id=ocr_result.document_id,
             input_payload={"page_count": len(ocr_result.pages)},
-            output_payload={"primary_language": primary, "details": [p.model_dump() for p in page_results]},
+            output_payload={"primary_language": primary, "details": [p.model_dump() for p in page_results], "engine": "rules"},
             status="SUCCESS",
         )
 

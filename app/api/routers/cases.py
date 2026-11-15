@@ -8,12 +8,23 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import select, delete
 
 from app.db.session import get_db
-from app.db.models import UserModel
+from app.db.models import (
+    UserModel,
+    DocumentTranslationModel,
+    VoiceBriefModel,
+    FactModel,
+    SummaryModel,
+    TimelineEventModel,
+    ContradictionModel,
+    ValidationIssueModel,
+)
 from app.security.jwt import get_current_user, require_lawyer
 from app.services.case_manager import CaseManager
 from app.services.document_manager import DocumentManager
+from app.schemas.translation import TranslatedSummary
 from app.config import get_settings
 
 settings = get_settings()
@@ -38,6 +49,16 @@ class CreateCaseRequest(BaseModel):
         None,
         description="Court or forum of jurisdiction",
         json_schema_extra={"example": "Sessions Court at Greater Bombay"},
+    )
+    dpdp_purpose: Optional[str] = Field(
+        default="Legal Defense & Case Preparation",
+        description="Purpose of data processing under DPDP Act",
+        json_schema_extra={"example": "Criminal Trial Defense & Legal Advice"},
+    )
+    retention_days: Optional[int] = Field(
+        default=365,
+        description="Data retention period in days before scheduled crypto-shredding",
+        json_schema_extra={"example": 365},
     )
 
 
@@ -82,6 +103,8 @@ def create_case(
         title=req.title,
         case_number=req.case_number,
         court=req.court,
+        dpdp_purpose=req.dpdp_purpose,
+        retention_days=req.retention_days,
     )
     return CaseResponse(
         id=case.id,
@@ -231,4 +254,148 @@ def get_case_dashboard(
     manager = CaseManager(db)
     is_admin = (current_user.role == "admin")
     return manager.get_dashboard(case_id=id, user_id=current_user.id, is_admin=is_admin)
+
+
+# -----------------------------------------------------------------------------
+# DPDP Compliance: Case Erasure & Cryptographic Shredding
+# -----------------------------------------------------------------------------
+import os
+from pathlib import Path
+from datetime import datetime, timezone
+from app.db.models import CaseModel, DocumentModel
+from app.security.audit import record_audit_event
+
+
+class CryptoShredRequest(BaseModel):
+    confirmation: str = Field(
+        ...,
+        description="Must be 'PERMANENTLY_SHRED_CASE_DATA' to confirm permanent deletion",
+        json_schema_extra={"example": "PERMANENTLY_SHRED_CASE_DATA"},
+    )
+    reason: Optional[str] = Field(
+        default="Client requested erasure under DPDP",
+        description="Reason for cryptographic shredding and erasure",
+    )
+
+
+class CryptoShredResponse(BaseModel):
+    case_id: str
+    status: str = "CRYPTO_SHREDDED"
+    shredded_at: str
+    files_destroyed_count: int
+    disclaimer: str = Field(default=settings.DISCLAIMER_TEXT)
+
+
+@router.post("/{id}/shred", response_model=CryptoShredResponse)
+def crypto_shred_case(
+    id: str,
+    payload: CryptoShredRequest,
+    current_user: UserModel = Depends(require_lawyer),
+    db: Session = Depends(get_db),
+):
+    """Permanently crypto-shreds all case documents, wipes blobs, and logs immutable audit trail."""
+    from fastapi import HTTPException
+    if payload.confirmation != "PERMANENTLY_SHRED_CASE_DATA":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirmation phrase must match 'PERMANENTLY_SHRED_CASE_DATA' exactly.",
+        )
+
+    case = db.scalar(select(CaseModel).where(CaseModel.id == id))
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Case '{id}' not found.")
+
+    if current_user.role != "admin" and case.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+
+    destroyed_count = 0
+    now = datetime.now(timezone.utc)
+
+    # Overwrite and remove document files
+    for doc in case.documents:
+        if doc.file_path and Path(doc.file_path).exists():
+            try:
+                # Overwrite ciphertext with zeroes before unlinking (shredding)
+                f_path = Path(doc.file_path)
+                size = f_path.stat().st_size
+                f_path.write_bytes(os.urandom(size))
+                f_path.unlink()
+                destroyed_count += 1
+            except Exception:
+                pass
+        doc.encrypted_content = None
+        doc.status = "shredded"
+
+    # Crypto-shred voice audio files on disk and records
+    voice_briefs = list(db.scalars(select(VoiceBriefModel).where(VoiceBriefModel.case_id == id)))
+    for vb in voice_briefs:
+        if vb.audio_path and Path(vb.audio_path).exists():
+            try:
+                p = Path(vb.audio_path)
+                p.write_bytes(os.urandom(p.stat().st_size))
+                p.unlink()
+                destroyed_count += 1
+            except Exception:
+                pass
+
+    db.execute(delete(VoiceBriefModel).where(VoiceBriefModel.case_id == id))
+    db.execute(delete(DocumentTranslationModel).where(DocumentTranslationModel.case_id == id))
+    db.execute(delete(FactModel).where(FactModel.case_id == id))
+    db.execute(delete(SummaryModel).where(SummaryModel.case_id == id))
+    db.execute(delete(TimelineEventModel).where(TimelineEventModel.case_id == id))
+    db.execute(delete(ContradictionModel).where(ContradictionModel.case_id == id))
+    db.execute(delete(ValidationIssueModel).where(ValidationIssueModel.document_id.in_([d.id for d in case.documents])))
+
+    case.is_crypto_shredded = True
+    case.shredded_at = now
+    case.status = "closed_shredded"
+    db.commit()
+
+    record_audit_event(
+        event_type="DPDP_CASE_CRYPTO_SHRED",
+        actor=f"user:{current_user.email}",
+        resource_id=id,
+        input_payload={"reason": payload.reason},
+        output_payload={"status": "CRYPTO_SHREDDED", "files_destroyed": destroyed_count},
+        confidence=1.0,
+        needs_human_review=False,
+        status="SUCCESS",
+    )
+
+    return CryptoShredResponse(
+        case_id=case.id,
+        status="CRYPTO_SHREDDED",
+        shredded_at=now.isoformat(),
+        files_destroyed_count=destroyed_count,
+        disclaimer=settings.DISCLAIMER_TEXT,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Summary Translation Endpoint (Phase B)
+# -----------------------------------------------------------------------------
+class SummaryTranslationRequest(BaseModel):
+    target_language: str = Field(default="hi", description="Target ISO language code (e.g. hi, mr, ta)")
+    source_language: str = Field(default="en", description="Source ISO language code (e.g. en, hi)")
+
+
+@router.post("/{id}/summary/translate", response_model=TranslatedSummary)
+def translate_case_summary(
+    id: str,
+    payload: SummaryTranslationRequest,
+    current_user: UserModel = Depends(require_lawyer),
+    db: Session = Depends(get_db),
+):
+    """Translate executive case summary into target regional language."""
+    manager = CaseManager(db)
+    is_admin = (current_user.role == "admin")
+    return manager.translate_case_summary(
+        case_id=id,
+        target_language=payload.target_language,
+        source_language=payload.source_language,
+        user_id=current_user.id,
+        is_admin=is_admin,
+    )
+
+
 

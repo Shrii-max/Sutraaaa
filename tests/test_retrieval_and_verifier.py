@@ -29,7 +29,11 @@ def test_hard_rule_4_valid_db_case_verified(db_session):
         bench="9 Judge Constitution Bench",
         summary="Right to privacy declared a fundamental right under Article 21.",
         ratio_decidendi="Privacy is a constitutionally protected right emerging from Article 21.",
-        full_text="Full text...",
+        full_text=(
+            "Privacy is a constitutionally protected fundamental right emerging primarily from the guarantee of "
+            "life and personal liberty under Article 21 of the Constitution of India. It also traverses other "
+            "fundamental freedoms recognized in Part III of the Constitution."
+        ),
     )
     db_session.add(case)
     db_session.commit()

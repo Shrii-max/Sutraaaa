@@ -1,0 +1,93 @@
+{
+  "version": "2024.1",
+  "source_act": "Code of Criminal Procedure, 1973 (CrPC)",
+  "target_act": "Bharatiya Nagarik Suraksha Sanhita, 2023 (BNSS)",
+  "mappings": [
+    {
+      "crpc_section": "41",
+      "bnss_section": "35",
+      "heading": "When police may arrest without warrant",
+      "substantive_change": true,
+      "notes": "Prior permission required for infirm/aged persons in minor offences"
+    },
+    {
+      "crpc_section": "41A",
+      "bnss_section": "35(3)",
+      "heading": "Notice of appearance before police officer",
+      "substantive_change": false
+    },
+    {
+      "crpc_section": "154",
+      "bnss_section": "173",
+      "heading": "Information in cognizable cases (First Information Report / FIR)",
+      "substantive_change": true,
+      "notes": "Introduced Zero FIR and electronic reporting with 3-day signature rule"
+    },
+    {
+      "crpc_section": "156(3)",
+      "bnss_section": "175(3)",
+      "heading": "Magistrate order directing police investigation",
+      "substantive_change": true,
+      "notes": "Mandatory prior complaint to Superintendent of Police before 156(3) application"
+    },
+    {
+      "crpc_section": "161",
+      "bnss_section": "180",
+      "heading": "Examination of witnesses by police",
+      "substantive_change": true,
+      "notes": "Audio-video electronic recording of statement permitted"
+    },
+    {
+      "crpc_section": "164",
+      "bnss_section": "183",
+      "heading": "Recording of confessions and statements by Magistrate",
+      "substantive_change": true,
+      "notes": "Mandatory audio-video recording for sexual offence victims"
+    },
+    {
+      "crpc_section": "167",
+      "bnss_section": "187",
+      "heading": "Remand procedure when investigation cannot be completed in 24 hours",
+      "substantive_change": true,
+      "notes": "15 days police custody in whole or in parts during first 40 or 60 days"
+    },
+    {
+      "crpc_section": "173(2)",
+      "bnss_section": "193(3)",
+      "heading": "Report of police officer on completion of investigation (Chargesheet)",
+      "substantive_change": true,
+      "notes": "Time limit of 90 days for investigation completion"
+    },
+    {
+      "crpc_section": "436",
+      "bnss_section": "478",
+      "heading": "In what cases bail to be taken (Bailable offences)",
+      "substantive_change": false
+    },
+    {
+      "crpc_section": "437",
+      "bnss_section": "480",
+      "heading": "When bail may be taken in case of non-bailable offence",
+      "substantive_change": false
+    },
+    {
+      "crpc_section": "438",
+      "bnss_section": "482",
+      "heading": "Direction for grant of bail to person apprehending arrest (Anticipatory bail)",
+      "substantive_change": false
+    },
+    {
+      "crpc_section": "439",
+      "bnss_section": "483",
+      "heading": "Special powers of High Court or Court of Session regarding bail",
+      "substantive_change": false
+    },
+    {
+      "crpc_section": "482",
+      "bnss_section": "528",
+      "heading": "Saving of inherent powers of High Court",
+      "substantive_change": false
+    }
+  ]
+}
+

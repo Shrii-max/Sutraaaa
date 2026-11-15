@@ -75,6 +75,20 @@ from app.schemas.risks import (
     RiskAnalysisOutput,
 )
 from app.schemas.dossier import LegalIntelligenceReport
+from app.schemas.translation import (
+    SentenceAlignment,
+    TranslationIssue,
+    TranslatedPage,
+    TranslationInput,
+    TranslatedDocument,
+    TranslatedSummary,
+)
+from app.schemas.voice import (
+    VoiceBriefInput,
+    VoiceBriefOutput,
+    VoiceQuestionInput,
+    VoiceQuestionOutput,
+)
 
 __all__ = [
     "SourceRef",
@@ -134,4 +148,14 @@ __all__ = [
     "LegalResearchInput",
     "LegalResearchOutput",
     "LegalIntelligenceReport",
+    "SentenceAlignment",
+    "TranslationIssue",
+    "TranslatedPage",
+    "TranslationInput",
+    "TranslatedDocument",
+    "TranslatedSummary",
+    "VoiceBriefInput",
+    "VoiceBriefOutput",
+    "VoiceQuestionInput",
+    "VoiceQuestionOutput",
 ]

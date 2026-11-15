@@ -59,7 +59,11 @@ class EvaluationHarness:
             citation="(2012) 1 SCC 40",
             summary="Bail jurisprudence under Section 420 IPC.",
             outcome="Bail Granted",
-            full_text="Bail is the rule and jail is the exception.",
+            full_text=(
+                "The primary purpose of bail in Indian criminal jurisprudence is to secure the attendance of "
+                "the accused at the trial. Deprivation of liberty must be considered a punishment unless required "
+                "to prevent tampering or evasion. Bail is the rule and jail is the exception under the Code of Criminal Procedure."
+            ),
         )
         self.session.add(j)
         self.session.commit()
@@ -311,6 +315,12 @@ class EvaluationHarness:
         return "\n".join(lines)
 
 
+def run_eval_suite(dataset_path: Optional[Path] = None, db_session=None) -> Dict[str, Any]:
+    """Top-level helper to execute evaluation harness and return metrics dict."""
+    harness = EvaluationHarness(dataset_path=dataset_path, db_session=db_session)
+    return harness.run_benchmark()
+
+
 if __name__ == "__main__":
     harness = EvaluationHarness()
     report = harness.run_benchmark()
@@ -324,3 +334,4 @@ if __name__ == "__main__":
     print(f"Hallucinated Citation Rate: {report['hallucinated_citation_rate'] * 100:.1f}% (Must be 0.0%)")
     print("=" * 60)
     print("Detailed report written to: tests/eval/eval_report.md\n")
+

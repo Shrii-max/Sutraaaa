@@ -4,6 +4,7 @@ Encapsulates all case-level legal domain operations, tenant isolation checks,
 timeline synthesis, contradiction analysis, and dashboard generation.
 """
 
+import hashlib
 import json
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
@@ -13,6 +14,7 @@ from sqlalchemy import select, func
 from app.db.models import (
     CaseModel,
     DocumentModel,
+    DocumentTranslationModel,
     FactModel,
     TimelineEventModel,
     ContradictionModel,
@@ -22,6 +24,8 @@ from app.db.models import (
 )
 from app.agents.statement_index import StatementIndexBuilder
 from app.agents.similar_case import SimilarCaseAgent
+from app.agents.translation import TranslationAgent
+from app.schemas.translation import TranslatedSummary
 from app.schemas.precedent import SimilarCaseInput
 from app.security.audit import record_audit_event
 from app.config import get_settings
@@ -49,14 +53,24 @@ class CaseManager:
         title: str,
         case_number: Optional[str] = None,
         court: Optional[str] = None,
+        dpdp_purpose: Optional[str] = None,
+        retention_days: Optional[int] = None,
     ) -> CaseModel:
-        """Create a new legal matter case file."""
+        """Create a new legal matter case file with DPDP retention."""
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        retention_val = retention_days if retention_days is not None else self.settings.DPDP_RETENTION_DAYS
+        retention_until = now + timedelta(days=retention_val)
+
         case = CaseModel(
             user_id=user_id,
             title=title.strip(),
             case_number=case_number.strip() if case_number else None,
             court=court.strip() if court else None,
             status="open",
+            dpdp_purpose=dpdp_purpose or "Legal Defense & Case Preparation",
+            retention_until=retention_until,
+            is_crypto_shredded=False,
         )
         self.session.add(case)
         self.session.commit()
@@ -176,9 +190,9 @@ class CaseManager:
 
         return {
             "case_id": case.id,
-            "query_fingerprint": res.query_fingerprint,
+            "query_fingerprint": getattr(res, "fingerprint_query", getattr(res, "query_fingerprint", "")),
             "similar_cases": [c.model_dump() for c in res.similar_cases],
-            "not_found_message": res.not_found_message,
+            "not_found_message": getattr(res, "not_found_message", getattr(res, "message", "no similar case found")),
             "disclaimer": self.settings.DISCLAIMER_TEXT,
         }
 
@@ -246,4 +260,68 @@ class CaseManager:
             "needs_counsel_attention": (len(high_defects) > 0 or pending_reviews_count > 0),
             "disclaimer": self.settings.DISCLAIMER_TEXT,
         }
+
+    def translate_case_summary(
+        self,
+        case_id: str,
+        target_language: str,
+        user_id: str,
+        source_language: str = "en",
+        is_admin: bool = False,
+    ) -> TranslatedSummary:
+        """Translate the case-level executive summary into target language."""
+        stmt = select(CaseModel).where(CaseModel.id == case_id)
+        case = self.session.scalar(stmt)
+        if not case:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Case '{case_id}' not found.",
+            )
+
+        self._verify_case_access(case, user_id, is_admin)
+
+        # Retrieve latest case summary
+        summary_stmt = (
+            select(SummaryModel)
+            .where(SummaryModel.case_id == case_id)
+            .order_by(SummaryModel.created_at.desc())
+        )
+        summary = self.session.scalars(summary_stmt).first()
+        if not summary or not summary.summary_text:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No executive summary exists for case '{case_id}' to translate.",
+            )
+
+        agent = TranslationAgent()
+        res = agent.translate_summary(
+            summary_text=summary.summary_text,
+            source_lang=source_language,
+            target_lang=target_language,
+            case_id=case_id,
+        )
+
+        # Persist summary translation
+        content_hash = hashlib.sha256(
+            f"{case_id}_{target_language}_{summary.summary_text}".encode("utf-8")
+        ).hexdigest()
+
+        issues_data = [iss.model_dump() for iss in res.issues]
+        trans_record = DocumentTranslationModel(
+            case_id=case_id,
+            content_hash=content_hash,
+            source_language=source_language,
+            target_language=target_language,
+            translation_type="summary",
+            translated_text=res.translated_summary,
+            issues_json=json.dumps(issues_data, ensure_ascii=False),
+            confidence=res.confidence,
+            needs_human_review=res.needs_human_review,
+            disclaimer=res.disclaimer,
+        )
+        self.session.add(trans_record)
+        self.session.commit()
+
+        return res
+
 

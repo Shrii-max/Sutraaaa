@@ -11,8 +11,11 @@ Follows Requirement:
 """
 
 import json
+import logging
 import re
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -102,11 +105,22 @@ class ValidationAgent(BaseAgent[ValidationInput, ValidationReport]):
         # -------------------------------------------------------------
         # Layer 2: LLM Review for Clerical / Logical Errors (citing SourceRefs)
         # -------------------------------------------------------------
-        llm_issues, llm_conf = self._run_llm_logical_review(doc_id, text, facts, meta)
+        llm_issues, llm_conf, llm_called, fallback_taken = self._run_llm_logical_review(doc_id, text, facts, meta)
         issues.extend(llm_issues)
 
         has_critical = any(i.severity in ["HIGH", "CRITICAL"] for i in issues)
         confidence = round(0.85 if not issues else (0.70 if has_critical else 0.80), 2)
+
+        engine_used = "llm" if llm_called and not fallback_taken else "rules"
+        status_val = "live_model" if engine_used == "llm" else "rule_based"
+        err_msg = "Language model unreachable: validation performed via deterministic procedural rules only." if fallback_taken else None
+
+        logger.info(
+            "AGENT_EXECUTION agent=ValidationAgent engine=%s llm_called=%s fallback_taken=%s",
+            engine_used,
+            llm_called,
+            fallback_taken,
+        )
 
         return ValidationReport(
             document_id=doc_id,
@@ -114,6 +128,11 @@ class ValidationAgent(BaseAgent[ValidationInput, ValidationReport]):
             has_critical_defects=has_critical,
             confidence=confidence,
             needs_human_review=has_critical or (len(issues) >= 3),
+            engine=engine_used,
+            llm_called=llm_called,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=f"Identified {len(issues)} validation issues across deterministic rules and LLM review.",
         )
 
@@ -310,7 +329,7 @@ class ValidationAgent(BaseAgent[ValidationInput, ValidationReport]):
 
     def _run_llm_logical_review(
         self, doc_id: str, text: str, facts: ExtractedFacts, meta: Optional[DocumentMeta]
-    ) -> tuple[List[ValidationIssue], float]:
+    ) -> tuple[List[ValidationIssue], float, bool, bool]:
         prompt = (
             f"Review the following Indian legal document text for subtle logical, typographical, "
             f"or procedural defects:\n"
@@ -323,9 +342,11 @@ class ValidationAgent(BaseAgent[ValidationInput, ValidationReport]):
         system = "You are a meticulous judicial scrutiny clerk identifying drafting defects with exact source quotes."
 
         try:
-            res, _ = self.llm.generate_structured(prompt=prompt, schema=_LLMValidationReview, system=system)
+            res, review_needed = self.llm.generate_structured(prompt=prompt, schema=_LLMValidationReview, system=system)
+            if review_needed or not res:
+                return [], 0.85, False, True
             valid_issues: List[ValidationIssue] = []
-            for item in res.logical_issues:
+            for item in getattr(res, "logical_issues", []):
                 snippet = item.snippet.strip()
                 if not snippet or snippet not in text:
                     continue  # Anti-hallucination: discard unsourced LLM complaints
@@ -347,9 +368,9 @@ class ValidationAgent(BaseAgent[ValidationInput, ValidationReport]):
                         suggestion=item.suggestion,
                     )
                 )
-            return valid_issues, res.confidence
+            return valid_issues, getattr(res, "confidence", 0.88), True, False
         except Exception:
-            return [], 0.85
+            return [], 0.85, False, True
 
     @staticmethod
     def _try_parse_date(date_str: str) -> Optional[datetime]:
@@ -367,10 +388,13 @@ class ValidationAgent(BaseAgent[ValidationInput, ValidationReport]):
 
     @staticmethod
     def _find_first_occurrence(doc_id: str, text: str, snippet: str) -> List[SourceRef]:
+        clean_text = text if text and len(text) > 0 else "[Document text empty]"
         s = snippet.strip()
         if not s:
-            s = text[:50]
-        loc = text.find(s)
-        if loc != -1:
+            s = clean_text[:min(len(clean_text), 50)]
+        loc = clean_text.find(s)
+        if loc != -1 and len(s) > 0:
             return [SourceRef(document_id=doc_id, page=1, char_start=loc, char_end=loc + len(s), snippet=s)]
-        return [SourceRef(document_id=doc_id, page=1, char_start=0, char_end=min(len(text), 30), snippet=text[:min(len(text), 30)])]
+        end_idx = max(1, min(len(clean_text), 30))
+        fallback_snip = clean_text[:end_idx] if clean_text[:end_idx] else "Notice"
+        return [SourceRef(document_id=doc_id, page=1, char_start=0, char_end=max(1, len(fallback_snip)), snippet=fallback_snip)]

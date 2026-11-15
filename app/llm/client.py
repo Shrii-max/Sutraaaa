@@ -85,7 +85,7 @@ class OpenAICompatClient(LLMClient):
         self.base_url = (base_url or settings.LLM_BASE_URL).rstrip("/")
         self.model = model or settings.LLM_MODEL
         self.timeout = timeout
-        self.client = httpx.Client(timeout=timeout)
+        self.client = httpx.Client(timeout=httpx.Timeout(timeout, connect=0.5))
 
     def chat(self, messages: Union[List[Dict[str, str]], str], system: Optional[str] = None) -> str:
         url = f"{self.base_url}/chat/completions"
@@ -138,6 +138,9 @@ class OpenAICompatClient(LLMClient):
                 return schema.model_validate(parsed)
             except (json.JSONDecodeError, ValidationError, Exception) as err:
                 last_error = str(err)
+                if isinstance(err, (httpx.ConnectError, httpx.NetworkError, httpx.TimeoutException, OSError)):
+                    logger.info("Local LLM server connection unavailable; proceeding to deterministic fallback.")
+                    raise err
                 logger.warning(f"chat_json attempt {attempt + 1}/{max_retries + 1} failed: {err}")
                 if attempt < max_retries:
                     current_prompt = (

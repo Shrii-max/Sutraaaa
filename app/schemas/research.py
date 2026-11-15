@@ -7,11 +7,13 @@ from app.schemas.common import BaseAgentInput, BaseAgentOutput
 
 class ResearchCitation(BaseModel):
     """Citation to an authoritative passage retrieved from the local database."""
-    source_type: Literal["judgment", "statute"]
+    source_type: Literal["judgment", "statute", "constitution"]
     id: str = Field(..., description="Database ID of judgment chunk or statute section")
     title_or_act: str = Field(..., description="Judgment title or Statute act name")
     citation_or_section: str = Field(..., description="Law report citation or Section number")
     verbatim_snippet: str = Field(..., description="Verbatim matched text snippet from the database")
+    source_url: Optional[str] = None
+    pdf_page: Optional[int] = None
     score: float = Field(default=1.0, ge=0.0, le=1.0)
 
 

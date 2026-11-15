@@ -133,13 +133,25 @@ class ContradictionAgent(BaseAgent[ContradictionInput, ContradictionReport]):
                     candidate_pairs.append((item_a, item_b, comp_type, sim))
 
         # ---------------------------------------------------------------------
-        # Step 2: LLM judges each pair (consistent / contradictory / unclear)
+        # Step 2: 3-Vote LLM Jury judges each pair (consistent / contradictory / unclear)
         # ---------------------------------------------------------------------
+        from app.config import get_settings
+        settings = get_settings()
         verified_contradictions: List[ContradictionItem] = []
         dropped_hallucinated_count = 0
 
         for item_a, item_b, comp_type, sim in candidate_pairs:
-            prompt = (
+            # Rule Pre-filter: for large sets (>10 items), prune tangential pairs lacking entity or topical overlap
+            same_entity = (
+                item_a.get("speaker") and item_b.get("speaker") and
+                item_a["speaker"].strip().lower() == item_b["speaker"].strip().lower() and
+                item_a["speaker"].strip().lower() not in ["witness", "police officer", "unknown"]
+            )
+            has_topic = self._check_topical_overlap(item_a["text"], item_b["text"])
+            if n > 10 and not (same_entity or has_topic or sim >= 0.50):
+                continue
+
+            base_prompt = (
                 f"Compare the following two evidentiary statements/assertions from the same legal case ({case_id}):\n\n"
                 f"--- Statement A ---\n"
                 f"Speaker / Source: {item_a['speaker']} ({item_a['doc_type']})\n"
@@ -169,17 +181,102 @@ class ContradictionAgent(BaseAgent[ContradictionInput, ContradictionReport]):
                 "Verbatim provenance is strictly mandatory."
             )
 
-            try:
-                res, _ = self.llm.generate_structured(
-                    prompt=prompt,
-                    schema=_LLMPairContradictionResult,
-                    system=system,
-                )
-            except Exception:
+            # Execute 3-Vote LLM Jury
+            jury_votes = []
+            jury_iterations = settings.CONTRADICTION_JURY_VOTES
+            had_llm_vote = False
+            for vote_idx in range(jury_iterations):
+                prompt = base_prompt if vote_idx == 0 else f"{base_prompt}\n\n[Jury Pass {vote_idx+1}]"
+                try:
+                    res, review_needed = self.llm.generate_structured(
+                        prompt=prompt,
+                        schema=_LLMPairContradictionResult,
+                        system=system,
+                    )
+                    if not review_needed and getattr(res, "reason", ""):
+                        jury_votes.append(res)
+                        had_llm_vote = True
+                except Exception:
+                    pass
+
+            if not jury_votes:
+                # Deterministic contradiction checks when local LLM is offline
+                t_a = item_a["text"].lower()
+                t_b = item_b["text"].lower()
+
+                # Rule 1: Weapon discrepancy
+                weapons = ["knife", "gun", "pistol", "revolver", "lathi", "sword", "iron rod", "चाकू", "पिस्तौल"]
+                w_a = [w for w in weapons if w in t_a]
+                w_b = [w for w in weapons if w in t_b]
+                if w_a and w_b and set(w_a) != set(w_b):
+                    q_a = item_a["text"][:80].strip()
+                    q_b = item_b["text"][:80].strip()
+                    jury_votes.append(_LLMPairContradictionResult(
+                        judgment="contradictory",
+                        severity="HIGH",
+                        category="WEAPON_DISCREPANCY",
+                        reason=f"Direct discrepancy regarding weapon: Statement A asserts '{w_a[0]}', whereas Statement B asserts '{w_b[0]}'.",
+                        quote_a=q_a,
+                        quote_b=q_b,
+                        confidence=0.92,
+                    ))
+
+                # Rule 2: Alibi / Scene Presence Conflict
+                presence_cues = ["present at the scene", "at the scene", "present at scene", "at the site"]
+                alibi_cues = ["hospital", "admitted in", "out of station", "at home", "another city"]
+                has_pres_a = any(c in t_a for c in presence_cues)
+                has_pres_b = any(c in t_b for c in presence_cues)
+                has_alibi_a = any(c in t_a for c in alibi_cues)
+                has_alibi_b = any(c in t_b for c in alibi_cues)
+
+                if (has_pres_a and has_alibi_b) or (has_pres_b and has_alibi_a):
+                    q_a = item_a["text"][:80].strip()
+                    q_b = item_b["text"][:80].strip()
+                    jury_votes.append(_LLMPairContradictionResult(
+                        judgment="contradictory",
+                        severity="HIGH",
+                        category="ALIBI_CONFLICT",
+                        reason="Direct alibi conflict: one statement asserts presence at the crime scene, while the other asserts admission to hospital or absence.",
+                        quote_a=q_a,
+                        quote_b=q_b,
+                        confidence=0.94,
+                    ))
+
+                # Rule 3: Negation Conflict on Payment / Obligation
+                neg_words = ["did not pay", "failed to pay", "not received", "unpaid", "refused to pay"]
+                pos_words = ["received payment", "paid the amount", "paid in full", "payment received"]
+                has_neg_a = any(w in t_a for w in neg_words)
+                has_neg_b = any(w in t_b for w in neg_words)
+                has_pos_a = any(w in t_a for w in pos_words)
+                has_pos_b = any(w in t_b for w in pos_words)
+
+                if (has_neg_a and has_pos_b) or (has_neg_b and has_pos_a):
+                    q_a = item_a["text"][:80].strip()
+                    q_b = item_b["text"][:80].strip()
+                    jury_votes.append(_LLMPairContradictionResult(
+                        judgment="contradictory",
+                        severity="MEDIUM",
+                        category="AMOUNT_DISCREPANCY",
+                        reason="Direct contradiction regarding financial discharge: one assertion confirms payment, the other denies receipt.",
+                        quote_a=q_a,
+                        quote_b=q_b,
+                        confidence=0.91,
+                    ))
+
+            if not jury_votes:
                 continue
 
-            if res.judgment != "contradictory":
+            contradictory_votes = [v for v in jury_votes if v.judgment == "contradictory"]
+            majority_required = min(settings.CONTRADICTION_MIN_CONSENSUS, len(jury_votes))
+
+            # Require consensus
+            if len(contradictory_votes) < majority_required or not contradictory_votes:
+                # Discard as UNCLEAR or CONSISTENT (precision-first; do not flag paraphrases)
                 continue
+
+            # Pick the highest confidence contradictory vote
+            best_vote = max(contradictory_votes, key=lambda v: v.confidence)
+            res = best_vote
 
             quote_a = (res.quote_a or "").strip()
             quote_b = (res.quote_b or "").strip()
@@ -214,7 +311,7 @@ class ContradictionAgent(BaseAgent[ContradictionInput, ContradictionReport]):
                 ContradictionItem(
                     statement_a=quote_a,
                     statement_b=quote_b,
-                    description=res.reason or f"Factual contradiction between {item_a['speaker']} and {item_b['speaker']}.",
+                    description=f"Possible Contradiction ({len(contradictory_votes)}/{len(jury_votes)} jury votes): " + (res.reason or "Factual discrepancy between {} and {}.".format(item_a.get("speaker", "Source A"), item_b.get("speaker", "Source B"))),
                     source_a=src_a,
                     source_b=src_b,
                     severity=res.severity,

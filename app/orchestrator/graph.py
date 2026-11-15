@@ -371,6 +371,12 @@ class ProcessingOrchestrator:
         )
         rec = self.session.execute(stmt).scalars().first()
         serialized_payload = None
+        engine = getattr(payload, "engine", None) if payload is not None else None
+        fallback_taken = bool(getattr(payload, "fallback_taken", False)) if payload is not None else False
+        if isinstance(payload, dict):
+            engine = payload.get("engine", engine)
+            fallback_taken = bool(payload.get("fallback_taken", fallback_taken))
+
         if payload is not None:
             if hasattr(payload, "model_dump"):
                 serialized_payload = json.dumps(payload.model_dump(), default=str)
@@ -382,6 +388,9 @@ class ProcessingOrchestrator:
         if rec:
             rec.status = status
             rec.attempt = attempt
+            if engine:
+                rec.engine = engine
+            rec.fallback_taken = fallback_taken
             if serialized_payload is not None:
                 rec.state_payload = serialized_payload
             if error:
@@ -392,6 +401,8 @@ class ProcessingOrchestrator:
                 case_id=case_id,
                 step_name=step_name,
                 status=status,
+                engine=engine or "rules",
+                fallback_taken=fallback_taken,
                 attempt=attempt,
                 state_payload=serialized_payload,
                 error_message=error,
@@ -846,10 +857,12 @@ class ProcessingOrchestrator:
             timeline_res = self.timeline_agent.run(inp_tl)
             for ev in timeline_res.events:
                 s_ref_dict = ev.source.model_dump() if ev.source else {}
+                t_date = ev.normalized_date or getattr(ev, "date_str", getattr(ev, "raw_date", "Unknown"))
+                t_title = getattr(ev, "event_title", getattr(ev, "title", "Legal Event"))
                 t_event = TimelineEventModel(
                     case_id=case_id,
-                    event_date=ev.normalized_date or ev.raw_date,
-                    title=ev.title,
+                    event_date=t_date,
+                    title=t_title,
                     description=ev.description,
                     is_important=(ev.importance == "HIGH"),
                     source_ref=json.dumps(s_ref_dict),

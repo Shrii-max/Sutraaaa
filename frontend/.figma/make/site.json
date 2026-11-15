@@ -1,0 +1,10 @@
+{
+  "description": "Helps lawyers organize cases and documents, track hearings and evidence, and review AI-extracted timelines and activity in one dashboard.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

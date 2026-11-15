@@ -7,12 +7,15 @@ Follows Hard Rule 5: Every agent run writes an append-only audit log row.
 Follows Hard Rule 10: Injects mandatory legal decision-support disclaimer.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar, Optional
 from app.config import get_settings
 from app.schemas.common import BaseAgentInput, BaseAgentOutput
 from app.security.audit import record_audit_event
 from app.llm.client import LLMClient, get_llm_client
+
+logger = logging.getLogger(__name__)
 
 TInput = TypeVar("TInput", bound=BaseAgentInput)
 TOutput = TypeVar("TOutput", bound=BaseAgentOutput)
@@ -39,6 +42,17 @@ class BaseAgent(ABC, Generic[TInput, TOutput]):
 
         try:
             output = self._execute(input_data)
+
+            # Extract engine execution status
+            engine_used = getattr(output, "engine", "rules")
+            llm_called = bool(getattr(output, "llm_called", False))
+            fallback_taken = bool(getattr(output, "fallback_taken", False))
+
+            # Task 1: Required structured log line
+            logger.info(
+                f"AGENT_EXECUTION: agent={self.agent_name} engine={engine_used} "
+                f"llm_called={llm_called} fallback_taken={fallback_taken}"
+            )
 
             # Enforce confidence threshold guard
             if output.confidence < self.settings.CONFIDENCE_THRESHOLD:
@@ -67,6 +81,10 @@ class BaseAgent(ABC, Generic[TInput, TOutput]):
             return output
 
         except Exception as e:
+            logger.info(
+                f"AGENT_EXECUTION: agent={self.agent_name} engine=error "
+                f"llm_called=False fallback_taken=True"
+            )
             # Audit log failure
             record_audit_event(
                 event_type="AGENT_RUN",

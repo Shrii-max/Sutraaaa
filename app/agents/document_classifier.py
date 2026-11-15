@@ -76,17 +76,28 @@ class DocumentClassifierAgent(BaseAgent[DocumentClassifierInput, DocumentClassif
             system=system,
         )
 
-        # Fallback to rule_type if LLM produced 'other' but rule was confident
-        final_doc_type = llm_response.doc_type
-        if final_doc_type == "other" and rule_type != "other":
+        # Fallback to rule_type if LLM produced 'other', None, or failed
+        final_doc_type = llm_response.doc_type if hasattr(llm_response, "doc_type") and llm_response.doc_type else rule_type
+        if (final_doc_type == "other" or not final_doc_type) and rule_type != "other":
             final_doc_type = rule_type
+        if not final_doc_type:
+            final_doc_type = "other"
 
-        # Ensure purpose is present
-        purpose_str = llm_response.purpose or (
-            f"Document filed by {llm_response.filing_party or 'complainant/petitioner'} "
-            f"before {llm_response.court_named or 'the appropriate judicial forum'} "
-            f"seeking {llm_response.relief_sought or 'adjudication/relief'}."
+        # Ensure purpose is formulated accurately
+        purpose_str = (
+            llm_response.purpose
+            if hasattr(llm_response, "purpose") and llm_response.purpose
+            else f"Document filed by {getattr(llm_response, 'filing_party', None) or 'complainant/petitioner'} "
+                 f"before {getattr(llm_response, 'court_named', None) or 'the judicial forum'} "
+                 f"seeking {getattr(llm_response, 'relief_sought', None) or 'appropriate legal remedy'}."
         )
+
+        reported_conf = float(getattr(llm_response, "confidence", 0.80) or 0.80)
+        engine_used = "rules" if review_needed else "llm"
+        status_val = "fallback" if review_needed else "live_model"
+        err_msg = "Language model unreachable: classified via rules only." if review_needed else None
+        if review_needed:
+            reported_conf = min(reported_conf, 0.70)
 
         doc_meta = DocumentMeta(
             doc_id=input_data.document_id,
@@ -99,13 +110,18 @@ class DocumentClassifierAgent(BaseAgent[DocumentClassifierInput, DocumentClassif
         return DocumentClassifierOutput(
             document_meta=doc_meta,
             purpose=purpose_str,
-            filing_party=llm_response.filing_party,
-            opposite_party=llm_response.opposite_party,
-            court_named=llm_response.court_named,
-            relief_sought=llm_response.relief_sought,
-            confidence=round(llm_response.confidence, 2),
-            needs_human_review=review_needed or (llm_response.confidence < 0.75),
-            audit_notes=f"Classified document as '{final_doc_type}' with confidence {llm_response.confidence:.2f}.",
+            filing_party=getattr(llm_response, "filing_party", None),
+            opposite_party=getattr(llm_response, "opposite_party", None),
+            court_named=getattr(llm_response, "court_named", None),
+            relief_sought=getattr(llm_response, "relief_sought", None),
+            confidence=round(reported_conf, 2),
+            needs_human_review=review_needed or (reported_conf < 0.75),
+            engine=engine_used,
+            llm_called=not review_needed,
+            fallback_taken=review_needed,
+            status=status_val,
+            error_message=err_msg,
+            audit_notes=f"Classified document as '{final_doc_type}' via {engine_used} (fallback={review_needed}) with confidence {reported_conf:.2f}.",
         )
 
     @staticmethod
@@ -113,15 +129,30 @@ class DocumentClassifierAgent(BaseAgent[DocumentClassifierInput, DocumentClassif
         t = text.lower()
         f = filename.lower()
 
-        if "fir" in f or "first information report" in t or "प्रथम सूचना रिपोर्ट" in t or "u/s" in t and "police station" in t:
-            return "FIR"
-        if "statement under section 161" in t or "161 crpc" in t or "section 164" in t or "बयान धारा 161" in t or "examination-in-chief" in t:
+        # Check witness statement first if filename or text explicitly denotes witness statement
+        if (
+            "witness" in f
+            or "statement" in f
+            or "pw" in f
+            or "dw" in f
+            or "statement of witness" in t
+            or "under section 161" in t
+            or "section 161" in t
+            or "161 cr" in t
+            or "section 164" in t
+            or "बयान धारा 161" in t
+            or "examination-in-chief" in t
+            or "cross-examination" in t
+        ):
             return "witness_statement"
+
+        if "fir" in f or "first information report" in t or "प्रथम सूचना रिपोर्ट" in t or ("u/s" in t and "police station" in t):
+            return "FIR"
         if "affidavit" in t or "solemnly affirm" in t or "deponent" in t or "शपथ पत्र" in t:
             return "affidavit"
         if "judgment" in t or "coram:" in t or "bench:" in t or "appeal dismissed" in t or "appeal allowed" in t:
             return "judgment"
-        if "petition" in t or "suit for" in t or "writ petition" in t or "special leave petition" in t or "prayer" in t:
+        if "petition" in t or "suit for" in t or "writ petition" in t or "special leave petition" in t or "prayer" in t or "परिवाद" in t:
             return "petition"
         if "interim order" in t or "notice returnable" in t or "court order" in t:
             return "order"

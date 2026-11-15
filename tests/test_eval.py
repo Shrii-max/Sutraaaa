@@ -80,3 +80,4 @@ def test_eval_benchmark_suite(db_session):
     assert report["fact_extraction_precision"] >= 0.80
     assert report["fact_extraction_recall"] >= 0.80
     assert report["timeline_date_accuracy"] >= 0.85
+

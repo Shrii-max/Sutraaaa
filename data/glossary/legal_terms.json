@@ -1,0 +1,343 @@
+{
+  "version": "1.0",
+  "description": "Standardized trilingual legal glossary for Indian court documentation (English, Hindi, Marathi)",
+  "terms": [
+    {
+      "english": "first information report",
+      "aliases": ["fir", "f.i.r."],
+      "hindi": "प्रथम सूचना रिपोर्ट",
+      "marathi": "प्रथम माहिती अहवाल",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "chargesheet",
+      "aliases": ["charge-sheet", "charge sheet", "final report"],
+      "hindi": "आरोप पत्र",
+      "marathi": "दोषारोप पत्र",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "bail",
+      "aliases": [],
+      "hindi": "जमानत",
+      "marathi": "जामीन",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "anticipatory bail",
+      "aliases": ["pre-arrest bail"],
+      "hindi": "अग्रिम जमानत",
+      "marathi": "अटकपूर्व जामीन",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "interim bail",
+      "aliases": [],
+      "hindi": "अंतरिम जमानत",
+      "marathi": "अंतरिम जामीन",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "regular bail",
+      "aliases": [],
+      "hindi": "नियमित जमानत",
+      "marathi": "नियमित जामीन",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "affidavit",
+      "aliases": ["sworn statement"],
+      "hindi": "शपथ पत्र",
+      "marathi": "प्रतिज्ञापत्र",
+      "category": "evidentiary"
+    },
+    {
+      "english": "summons",
+      "aliases": ["summon"],
+      "hindi": "समन",
+      "marathi": "समन्स",
+      "category": "procedure"
+    },
+    {
+      "english": "warrant",
+      "aliases": [],
+      "hindi": "अधिपत्र",
+      "marathi": "अधिपत्र",
+      "category": "procedure"
+    },
+    {
+      "english": "bailable warrant",
+      "aliases": [],
+      "hindi": "जमानती अधिपत्र",
+      "marathi": "जामीनपात्र अधिपत्र",
+      "category": "procedure"
+    },
+    {
+      "english": "non-bailable warrant",
+      "aliases": ["nbw"],
+      "hindi": "गैर-जमानती अधिपत्र",
+      "marathi": "अजामीनपात्र अधिपत्र",
+      "category": "procedure"
+    },
+    {
+      "english": "cognizable offence",
+      "aliases": ["cognizable offense", "cognizable"],
+      "hindi": "संज्ञेय अपराध",
+      "marathi": "दखलपात्र गुन्हा",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "non-cognizable offence",
+      "aliases": ["non-cognizable offense", "non-cognizable", "nc"],
+      "hindi": "असंज्ञेय अपराध",
+      "marathi": "अदखलपात्र गुन्हा",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "bailable offence",
+      "aliases": ["bailable"],
+      "hindi": "जमानती अपराध",
+      "marathi": "जामीनपात्र गुन्हा",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "non-bailable offence",
+      "aliases": ["non-bailable"],
+      "hindi": "गैर-जमानती अपराध",
+      "marathi": "अजामीनपात्र गुन्हा",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "compounding",
+      "aliases": ["compoundable"],
+      "hindi": "शमन",
+      "marathi": "तडजोड",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "cross-examination",
+      "aliases": ["cross examination", "cross-exam"],
+      "hindi": "जिरह",
+      "marathi": "उलटतपासणी",
+      "category": "evidence"
+    },
+    {
+      "english": "examination-in-chief",
+      "aliases": ["examination in chief", "chief examination"],
+      "hindi": "मुख्य परीक्षा",
+      "marathi": "मुख्य तपासणी",
+      "category": "evidence"
+    },
+    {
+      "english": "re-examination",
+      "aliases": ["re-exam"],
+      "hindi": "पुनः परीक्षा",
+      "marathi": "पुनर्तपासणी",
+      "category": "evidence"
+    },
+    {
+      "english": "deposition",
+      "aliases": ["witness statement", "statement"],
+      "hindi": "बयान",
+      "marathi": "साक्ष",
+      "category": "evidence"
+    },
+    {
+      "english": "remand",
+      "aliases": [],
+      "hindi": "रिमांड",
+      "marathi": "कोठडी",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "judicial custody",
+      "aliases": ["jc"],
+      "hindi": "न्यायिक हिरासत",
+      "marathi": "न्यायालयीन कोठडी",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "police custody",
+      "aliases": ["pc"],
+      "hindi": "पुलिस हिरासत",
+      "marathi": "पोलीस कोठडी",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "vakalatnama",
+      "aliases": ["vakalathnama", "memo of appearance"],
+      "hindi": "वकालतनामा",
+      "marathi": "वकिलीपत्र",
+      "category": "procedure"
+    },
+    {
+      "english": "petition",
+      "aliases": [],
+      "hindi": "याचिका",
+      "marathi": "याचिका",
+      "category": "pleadings"
+    },
+    {
+      "english": "revision petition",
+      "aliases": ["revision"],
+      "hindi": "पुनरीक्षण याचिका",
+      "marathi": "पुनरीक्षण याचिका",
+      "category": "pleadings"
+    },
+    {
+      "english": "appeal",
+      "aliases": [],
+      "hindi": "अपील",
+      "marathi": "अपील",
+      "category": "procedure"
+    },
+    {
+      "english": "special leave petition",
+      "aliases": ["slp"],
+      "hindi": "विशेष अनुमति याचिका",
+      "marathi": "विशेष अनुमती याचिका",
+      "category": "constitutional"
+    },
+    {
+      "english": "writ petition",
+      "aliases": ["writ"],
+      "hindi": "रिट याचिका",
+      "marathi": "रिट याचिका",
+      "category": "constitutional"
+    },
+    {
+      "english": "interim order",
+      "aliases": [],
+      "hindi": "अंतरिम आदेश",
+      "marathi": "अंतरिम आदेश",
+      "category": "orders"
+    },
+    {
+      "english": "stay order",
+      "aliases": ["stay"],
+      "hindi": "स्थगन आदेश",
+      "marathi": "स्थगिती आदेश",
+      "category": "orders"
+    },
+    {
+      "english": "injunction",
+      "aliases": [],
+      "hindi": "निषेधाज्ञा",
+      "marathi": "मनाई हुकूम",
+      "category": "civil_procedure"
+    },
+    {
+      "english": "decree",
+      "aliases": [],
+      "hindi": "डिक्री",
+      "marathi": "हुकूमनामा",
+      "category": "civil_procedure"
+    },
+    {
+      "english": "judgment",
+      "aliases": ["judgement"],
+      "hindi": "निर्णय",
+      "marathi": "निकाल",
+      "category": "orders"
+    },
+    {
+      "english": "plaint",
+      "aliases": [],
+      "hindi": "वादपत्र",
+      "marathi": "वादपत्र",
+      "category": "civil_procedure"
+    },
+    {
+      "english": "written statement",
+      "aliases": ["ws"],
+      "hindi": "लिखित कथन",
+      "marathi": "लेखी जबाब",
+      "category": "civil_procedure"
+    },
+    {
+      "english": "cause of action",
+      "aliases": [],
+      "hindi": "वाद कारण",
+      "marathi": "दाव्याचे कारण",
+      "category": "civil_procedure"
+    },
+    {
+      "english": "res judicata",
+      "aliases": [],
+      "hindi": "प्राङ्न्याय",
+      "marathi": "पूर्व न्याय",
+      "category": "civil_procedure"
+    },
+    {
+      "english": "limitation",
+      "aliases": ["period of limitation"],
+      "hindi": "परिसीमा",
+      "marathi": "मुदत",
+      "category": "procedure"
+    },
+    {
+      "english": "prima facie",
+      "aliases": [],
+      "hindi": "प्रथम दृष्ट्या",
+      "marathi": "प्रथमदर्शनी",
+      "category": "evidence"
+    },
+    {
+      "english": "electronic record",
+      "aliases": ["electronic evidence"],
+      "hindi": "इलेक्ट्रॉनिक अभिलेख",
+      "marathi": "इलेक्ट्रॉनिक नोंद",
+      "category": "evidence"
+    },
+    {
+      "english": "certificate under section 65b",
+      "aliases": ["section 65b certificate", "65b certificate"],
+      "hindi": "धारा 65बी प्रमाण पत्र",
+      "marathi": "कलम 65बी प्रमाणपत्र",
+      "category": "evidence"
+    },
+    {
+      "english": "panchnama",
+      "aliases": ["panchanama", "spot panchnama", "seizure panchnama"],
+      "hindi": "पंचनामा",
+      "marathi": "पंचनामा",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "acquittal",
+      "aliases": ["acquitted"],
+      "hindi": "दोषमुक्ति",
+      "marathi": "निर्दोष मुक्तता",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "conviction",
+      "aliases": ["convicted"],
+      "hindi": "दोषसिद्धि",
+      "marathi": "दोषसिद्धी",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "dying declaration",
+      "aliases": ["dd"],
+      "hindi": "मृत्युकालिक कथन",
+      "marathi": "मृत्युपूर्व जबाब",
+      "category": "evidence"
+    },
+    {
+      "english": "surety",
+      "aliases": ["surety bond"],
+      "hindi": "प्रतिभू",
+      "marathi": "जामीनदार",
+      "category": "criminal_procedure"
+    },
+    {
+      "english": "personal bond",
+      "aliases": ["pr bond"],
+      "hindi": "मुचलका",
+      "marathi": "वैयक्तिक बंधपत्र",
+      "category": "criminal_procedure"
+    }
+  ]
+}
+

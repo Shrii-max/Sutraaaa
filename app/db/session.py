@@ -9,9 +9,20 @@ Base = declarative_base()
 
 
 def get_engine():
-    """Create SQLAlchemy 2.0 engine from settings."""
+    """Create SQLAlchemy 2.0 engine from settings, falling back to local SQLite demo db if PostgreSQL is unavailable."""
     settings = get_settings()
     db_url = settings.DB_URL
+
+    if db_url in ["sqlite:///lexagent.db", "sqlite:///demo_lexagent.db", "sqlite:///:memory:"]:
+        if "lexagent.db" in db_url:
+            from pathlib import Path
+            live_db_path = Path(__file__).resolve().parent.parent.parent / "lexagent.db"
+            db_url = f"sqlite:///{live_db_path.as_posix()}"
+        elif "demo_lexagent.db" in db_url:
+            from pathlib import Path
+            demo_db_path = Path(__file__).resolve().parent.parent.parent / "demo_lexagent.db"
+            if demo_db_path.exists():
+                db_url = f"sqlite:///{demo_db_path.as_posix()}"
 
     connect_args = {}
     if db_url.startswith("sqlite"):
@@ -19,13 +30,26 @@ def get_engine():
     elif "postgresql" in db_url:
         connect_args["connect_timeout"] = 2
 
-    engine = create_engine(
-        db_url,
-        echo=False,
-        connect_args=connect_args,
-        pool_pre_ping=True,
-    )
-    return engine
+    try:
+        engine = create_engine(
+            db_url,
+            echo=False,
+            connect_args=connect_args,
+            pool_pre_ping=True,
+        )
+        if "postgresql" in db_url:
+            with engine.connect() as conn:
+                pass
+        return engine
+    except Exception:
+        from pathlib import Path
+        live_db_path = Path(__file__).resolve().parent.parent.parent / "lexagent.db"
+        sqlite_url = f"sqlite:///{live_db_path.as_posix()}"
+        return create_engine(
+            sqlite_url,
+            echo=False,
+            connect_args={"check_same_thread": False},
+        )
 
 
 _engine = None
@@ -98,6 +122,8 @@ def install_audit_append_only_triggers(engine):
 
 def init_db(engine=None):
     """Initialize database extension (pgvector), all tables, and audit immutability triggers."""
+    import app.db.models  # Ensure all ORM models are registered on Base.metadata
+
     if engine is None:
         engine = get_engine()
 

@@ -8,7 +8,15 @@ venv/
 .venv/
 .env
 *.db
+*.db.*
 *.sqlite3
+demo_lexagent.db*
+lexagent.db*
+uploads/
+storage/
+*.enc
+*.pem
+*.key
 .pytest_cache/
 .coverage
 htmlcov/

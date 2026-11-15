@@ -27,10 +27,16 @@ class DocumentMeta(BaseModel):
 
 
 class PageOCR(BaseModel):
-    """Text and confidence extracted for a single page."""
+    """Text and confidence extracted for a single page with v2 visual indicators."""
     page_number: int = Field(..., ge=1)
     text: str = Field(..., description="Extracted textual content on this page")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Per-page OCR extraction confidence")
+    has_handwriting: bool = Field(default=False, description="Whether handwriting was detected on this page")
+    has_stamp: bool = Field(default=False, description="Whether an official seal or rubber stamp was detected")
+    has_signature: bool = Field(default=False, description="Whether advocate or judicial signature was detected")
+    word_confidences: List[dict] = Field(default_factory=list, description="Per-word confidence breakdown")
+    needs_review: bool = Field(default=False, description="Whether page confidence is below threshold")
+    image_base64: Optional[str] = Field(default=None, description="Base64 encoded page thumbnail or preview")
 
 
 class OCRResult(BaseModel):
@@ -38,6 +44,12 @@ class OCRResult(BaseModel):
     document_id: str
     pages: List[PageOCR] = Field(default_factory=list)
     overall_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    engine: str = Field(default="pymupdf", description="pymupdf | tesseract | fallback")
+    llm_called: bool = Field(default=False)
+    fallback_taken: bool = Field(default=False)
+    status: Literal["live_model", "rule_based", "fallback", "failed", "needs_review"] = Field(default="rule_based")
+    needs_human_review: bool = Field(default=False)
+    error_message: Optional[str] = None
 
 
 class PageLanguage(BaseModel):
@@ -52,4 +64,11 @@ class LanguageResult(BaseModel):
     document_id: str
     pages: List[PageLanguage] = Field(default_factory=list)
     primary_language: str = Field(default="english")
+    engine: str = Field(default="rules", description="unicode_block_heuristics")
+    llm_called: bool = Field(default=False)
+    fallback_taken: bool = Field(default=False)
+    status: Literal["live_model", "rule_based", "fallback", "failed", "needs_review"] = Field(default="rule_based")
+    confidence: float = Field(default=0.98, ge=0.0, le=1.0)
+    needs_human_review: bool = Field(default=False)
+    error_message: Optional[str] = None
 

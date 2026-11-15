@@ -7,11 +7,69 @@ Enforces Hard Rule 5: Audit logging on sensitive authentication and security eve
 import hashlib
 import hmac
 import os
+import json
+import base64
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
-import jwt
+try:
+    import jwt
+except ImportError:
+    class _SimpleJWT:
+        @staticmethod
+        def _b64encode(data: bytes) -> str:
+            return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+        @staticmethod
+        def _b64decode(s: str) -> bytes:
+            padding = 4 - (len(s) % 4)
+            if padding != 4:
+                s += "=" * padding
+            return base64.urlsafe_b64decode(s)
+
+        @classmethod
+        def encode(cls, payload: dict, secret: str, algorithm: str = "HS256") -> str:
+            header = {"typ": "JWT", "alg": algorithm}
+            h_b64 = cls._b64encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+            p_b64 = cls._b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+            signing_input = f"{h_b64}.{p_b64}".encode("utf-8")
+            sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+            s_b64 = cls._b64encode(sig)
+            return f"{h_b64}.{p_b64}.{s_b64}"
+
+        @classmethod
+        def decode(cls, token: str, secret: str, algorithms: list = None) -> dict:
+            parts = token.split(".")
+            if len(parts) != 3:
+                raise _PyJWTError("Invalid token format")
+            h_b64, p_b64, s_b64 = parts
+            signing_input = f"{h_b64}.{p_b64}".encode("utf-8")
+            expected_sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+            try:
+                actual_sig = cls._b64decode(s_b64)
+            except Exception:
+                raise _PyJWTError("Invalid signature base64")
+            if not hmac.compare_digest(expected_sig, actual_sig):
+                raise _PyJWTError("Signature verification failed")
+            try:
+                payload = json.loads(cls._b64decode(p_b64).decode("utf-8"))
+            except Exception:
+                raise _PyJWTError("Invalid payload JSON")
+            exp = payload.get("exp")
+            if exp and datetime.now(timezone.utc).timestamp() > exp:
+                raise _ExpiredSignatureError("Token expired")
+            return payload
+
+    class _ExpiredSignatureError(Exception):
+        pass
+
+    class _PyJWTError(Exception):
+        pass
+
+    jwt = _SimpleJWT
+    jwt.ExpiredSignatureError = _ExpiredSignatureError
+    jwt.PyJWTError = _PyJWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session

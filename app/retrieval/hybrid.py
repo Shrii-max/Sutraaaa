@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import text, select
 
+from app.config import get_settings
 from app.db.models import Judgment, JudgmentChunk, StatuteSection
 from app.llm.client import Embedder, LocalEmbeddingClient
 
@@ -138,13 +139,34 @@ class HybridRetriever:
         # 4. Apply optional Reranker
         reranked = self.reranker.rerank(query, fused)
 
+        # 5. Apply Retrieval Score Floor (drops low-relevance noise)
+        settings = get_settings()
+        floor = settings.RETRIEVAL_SCORE_FLOOR
+        if floor and floor > 0.0:
+            filtered = [
+                c for c in reranked
+                if (c.sparse_score or 0.0) > 0.0 or (c.dense_score or 0.0) >= floor
+            ]
+            return filtered[:top_k]
+
         return reranked[:top_k]
 
     def _dense_search(
         self, query: str, limit: int, filters: Optional[RetrievalFilter]
     ) -> List[RetrievedChunk]:
         """Dense embedding search on pgvector (with fallback for SQLite)."""
-        query_vec = self.embedder.embed_query(query)
+        try:
+            query_vec = self.embedder.embed_query(query)
+        except Exception as e:
+            logger.warning(
+                "Dense embedding search unavailable (%s); proceeding with sparse keyword retrieval only.",
+                e,
+            )
+            return []
+
+        if not query_vec or not any(query_vec):
+            return []
+
         is_postgres = "postgresql" in str(self.session.bind.url).lower() if self.session.bind else False
 
         if is_postgres:
@@ -199,6 +221,8 @@ class HybridRetriever:
                 "citation": j_row.citation,
                 "sections_cited": j_row.sections_cited,
                 "outcome": j_row.outcome,
+                "is_overruled": getattr(j_row, "is_overruled", False),
+                "overruled_by_citation": getattr(j_row, "overruled_by_citation", None),
             }
             if not self._matches_filter(meta, filters):
                 continue
@@ -291,6 +315,8 @@ class HybridRetriever:
                 "citation": j_row.citation,
                 "sections_cited": j_row.sections_cited,
                 "outcome": j_row.outcome,
+                "is_overruled": getattr(j_row, "is_overruled", False),
+                "overruled_by_citation": getattr(j_row, "overruled_by_citation", None),
             }
             if not self._matches_filter(meta, filters):
                 continue

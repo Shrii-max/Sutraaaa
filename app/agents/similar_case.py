@@ -100,6 +100,11 @@ class SimilarCaseAgent(BaseAgent[SimilarCaseInput, SimilarCaseOutput]):
                 message="no similar case found",
                 confidence=1.0,
                 needs_human_review=False,
+                engine="rules",
+                llm_called=False,
+                fallback_taken=True,
+                status="rule_based",
+                error_message="No precedent cases exceeded similarity threshold or embedding model unavailable.",
                 audit_notes="No precedent cases exceeded similarity threshold in local database.",
             )
 
@@ -148,6 +153,10 @@ class SimilarCaseAgent(BaseAgent[SimilarCaseInput, SimilarCaseOutput]):
                 f"Statutory sections overlap: {', '.join(overlap) if overlap else 'Common statutory domain'}; "
                 f"Procedural outcome: {judgment_db.outcome or 'Adjudicated'}."
             )
+            if getattr(judgment_db, "is_overruled", False):
+                overruled_cite = getattr(judgment_db, "overruled_by_citation", None)
+                warning_suffix = f" [WARNING: Precedent ratio marked OVERRULED{f' by {overruled_cite}' if overruled_cite else ''}. Exercise caution.]"
+                why_desc += warning_suffix
 
             # Optional LLM Grounded Summary
             summary_text = None
@@ -212,6 +221,10 @@ class SimilarCaseAgent(BaseAgent[SimilarCaseInput, SimilarCaseOutput]):
             message="Similar cases successfully retrieved and verified from DB",
             confidence=0.92,
             needs_human_review=False,
+            engine="rules",
+            llm_called=False,
+            fallback_taken=True,
+            status="rule_based",
             audit_notes=f"Retrieved {len(verified_cases)} verified precedent cases from local database for fingerprint query.",
         )
 

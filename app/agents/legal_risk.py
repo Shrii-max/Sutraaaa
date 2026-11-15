@@ -4,9 +4,12 @@ Follows Hard Rule 1: One class, typed Pydantic input/output, run() method, no hi
 Follows Hard Rule 3: Output carries confidence and needs_human_review.
 """
 
+import logging
 from typing import List
 from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
+
+logger = logging.getLogger(__name__)
 from app.schemas.risks import (
     LegalRiskItem,
     RiskAnalysisInput,
@@ -91,11 +94,38 @@ class LegalRiskAgent(BaseAgent[RiskAnalysisInput, RiskAnalysisOutput]):
                     )
                 )
 
+        if input_data.timeline_analysis and getattr(input_data.timeline_analysis, "has_limitation_risk", False):
+            if not any("limitation" in r.statutory_provision.lower() for r in risk_items):
+                coa = getattr(input_data.timeline_analysis, "cause_of_action_identified", None) or "earliest date"
+                risk_items.append(
+                    LegalRiskItem(
+                        risk_id=f"RISK-{len(risk_items) + 1:03d}",
+                        category="LIMITATION_BAR",
+                        severity="HIGH",
+                        statutory_provision="Limitation Act, 1963",
+                        issue_description=f"Action appears barred by statutory limitation from cause of action date ({coa}).",
+                        mitigation_strategy="File formal Application for Condonation of Delay under Section 5 Limitation Act with sufficient cause affidavit.",
+                    )
+                )
+
         has_high_risk = any(r.severity == "HIGH" for r in risk_items)
         if has_high_risk:
             review_needed = True
 
         confidence = llm_response.confidence
+        llm_called = not review_needed
+        fallback_taken = review_needed
+        engine_used = "llm" if llm_called else "rules"
+        status_val = "live_model" if llm_called else "needs_review"
+        err_msg = "Language model unreachable: risk assessment based on statutory heuristics only." if fallback_taken else None
+
+        logger.info(
+            "AGENT_EXECUTION agent=LegalRiskAgent engine=%s llm_called=%s fallback_taken=%s",
+            engine_used,
+            llm_called,
+            fallback_taken,
+        )
+
         return RiskAnalysisOutput(
             document_id=input_data.document_id,
             risks=risk_items,
@@ -104,6 +134,11 @@ class LegalRiskAgent(BaseAgent[RiskAnalysisInput, RiskAnalysisOutput]):
             evidence_defects_found=any(r.category == "EVIDENTIARY_DEFECT" for r in risk_items),
             confidence=round(confidence, 2),
             needs_human_review=review_needed,
+            engine=engine_used,
+            llm_called=llm_called,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=f"Identified {len(risk_items)} legal risk factors.",
         )
 

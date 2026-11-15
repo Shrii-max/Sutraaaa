@@ -6,11 +6,14 @@ LLM may only summarize text that retrieval returned, and every cited case id mus
 verified to exist in DB before output. If nothing is found, return "not found".
 """
 
+import logging
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.agents.base import BaseAgent
+
+logger = logging.getLogger(__name__)
 from app.schemas.precedent import (
     PrecedentMatch,
     VerifiedCaseCitation,
@@ -56,6 +59,7 @@ class PrecedentAnalysisAgent(BaseAgent[PrecedentSearchInput, PrecedentSearchOutp
 
         # Hard Rule 4: If nothing is found in DB, return "not found"
         if not verified_citations:
+            logger.info("AGENT_EXECUTION agent=PrecedentAnalysisAgent engine=rules llm_called=False fallback_taken=False")
             return PrecedentSearchOutput(
                 query=input_data.query_text,
                 matches=[],
@@ -64,6 +68,10 @@ class PrecedentAnalysisAgent(BaseAgent[PrecedentSearchInput, PrecedentSearchOutp
                 status_summary="not found",
                 confidence=1.0,
                 needs_human_review=False,
+                engine="rules",
+                llm_called=False,
+                fallback_taken=False,
+                status="rule_based",
                 audit_notes="No precedent cases matched the query in the local verified database.",
             )
 
@@ -130,6 +138,19 @@ class PrecedentAnalysisAgent(BaseAgent[PrecedentSearchInput, PrecedentSearchOutp
                 )
 
         confidence = llm_response.confidence
+        llm_called = not review_needed and len(getattr(llm_response, "summaries", [])) > 0
+        fallback_taken = review_needed or len(getattr(llm_response, "summaries", [])) == 0
+        engine_used = "llm" if llm_called else "rules"
+        status_val = "live_model" if llm_called else "rule_based"
+        err_msg = "Language model unreachable: precedent summaries extracted directly from verified DB records." if fallback_taken else None
+
+        logger.info(
+            "AGENT_EXECUTION agent=PrecedentAnalysisAgent engine=%s llm_called=%s fallback_taken=%s",
+            engine_used,
+            llm_called,
+            fallback_taken,
+        )
+
         return PrecedentSearchOutput(
             query=input_data.query_text,
             matches=final_matches,
@@ -138,6 +159,11 @@ class PrecedentAnalysisAgent(BaseAgent[PrecedentSearchInput, PrecedentSearchOutp
             status_summary=f"Successfully retrieved and verified {len(final_matches)} precedents from database",
             confidence=round(confidence, 2),
             needs_human_review=review_needed,
+            engine=engine_used,
+            llm_called=llm_called,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=f"Retrieved {len(candidates)} candidates from DB; verified {len(final_matches)}.",
         )
 

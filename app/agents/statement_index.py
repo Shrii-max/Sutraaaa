@@ -10,10 +10,13 @@ Follows Hard Rule 3: Output carries confidence and needs_human_review.
 """
 
 import json
+import logging
 from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
+
+logger = logging.getLogger(__name__)
 from app.schemas.source import SourceRef
 from app.schemas.statement import (
     StatementIndexItem,
@@ -94,6 +97,10 @@ class StatementIndexBuilder(BaseAgent[StatementIndexInput, StatementIndex]):
         victim_count = sum(1 for s in indexed_items if any(k in s.role.lower() for k in ["victim", "पीड़ित", "complainant", "परिवादी"]))
         witness_count = len(indexed_items) - victim_count
 
+        logger.info(
+            "AGENT_EXECUTION agent=StatementIndexBuilder engine=rules llm_called=False fallback_taken=False"
+        )
+
         return StatementIndex(
             case_id=input_data.case_id,
             statements=indexed_items,
@@ -102,6 +109,10 @@ class StatementIndexBuilder(BaseAgent[StatementIndexInput, StatementIndex]):
             witness_count=witness_count,
             confidence=0.92 if indexed_items else 0.70,
             needs_human_review=len(indexed_items) == 0,
+            engine="rules",
+            llm_called=False,
+            fallback_taken=False,
+            status="rule_based",
             audit_notes=f"StatementIndexBuilder compiled {len(indexed_items)} statements ({victim_count} victim, {witness_count} witness) for case {input_data.case_id}.",
         )
 

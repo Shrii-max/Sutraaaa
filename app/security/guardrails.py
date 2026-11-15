@@ -31,7 +31,28 @@ PROMPT_INJECTION_PATTERNS = [
     re.compile(r"(?i)\bnew\s+instructions\s*:\s*"),
     re.compile(r"(?i)<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>"),
     re.compile(r"(?i)```(?:system|instruction)"),
+    # Hindi prompt injection & jailbreak phrasing
+    re.compile(r"(?i)(?:मान\s*लें\s*कि\s*आप|अब\s*आप\s*(?:एक|बिना\s*प्रतिबंध)|पिछले\s*(?:सभी\s*)?निर्देश\s*(?:भूल\s*जाएं|अनदेखा\s*करें))"),
 ]
+
+
+def scan_for_prompt_injection(text: str) -> Tuple[bool, list[str]]:
+    """Scan document text for prompt-injection attacks and return flags and pattern descriptions."""
+    if not text:
+        return False, []
+
+    detected = []
+    for pattern in PROMPT_INJECTION_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            detected.append(match.group(0))
+
+    has_injection = len(detected) > 0
+    if has_injection:
+        logger.warning(f"Security Alert: Prompt injection attempt detected ({len(detected)} patterns found). Directives neutralized.")
+
+    return has_injection, detected
+
 
 # -----------------------------------------------------------------------------
 # 2. Indian PII Regex Patterns
@@ -113,3 +134,4 @@ def validate_file_upload(file_bytes: bytes, page_count: Optional[int] = None):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Document has {page_count} pages, which exceeds the maximum limit of {settings.MAX_DOCUMENT_PAGES} pages.",
         )
+

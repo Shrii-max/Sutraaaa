@@ -1,7 +1,10 @@
 """Tests for FastAPI endpoints, middleware, disclaimer injection, and audit trail."""
 
 import io
+import pytest
 from app.db.models import PrecedentCaseModel
+
+pytestmark = pytest.mark.live
 
 
 def test_api_health_endpoint(client):
@@ -33,7 +36,7 @@ def test_api_precedent_seeding_and_retrieval(client):
     assert res_seed.status_code == 200
     assert res_seed.json()["seeded_count"] == 1
 
-    res_list = client.get("/api/v1/cases")
+    res_list = client.get("/api/v1/precedents")
     assert res_list.status_code == 200
     assert res_list.json()["count"] >= 1
 
@@ -52,8 +55,9 @@ def test_api_document_upload(client):
     assert data["chunks_count"] >= 1
 
 
+@pytest.mark.live
 def test_api_analyze_direct_text(client):
-    """Verify direct text legal analysis through API."""
+    """Verify direct text legal analysis through API (requires live LLM)."""
     payload = {
         "raw_text": (
             "Arbitration dispute between TechSolutions Ltd and State Power Corp. "
