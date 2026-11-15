@@ -1,7 +1,10 @@
 """Tests for FastAPI endpoints, middleware, disclaimer injection, and audit trail."""
 
 import io
+import pytest
 from app.db.models import PrecedentCaseModel
+
+pytestmark = pytest.mark.live
 
 
 def test_api_health_endpoint(client):
@@ -52,8 +55,9 @@ def test_api_document_upload(client):
     assert data["chunks_count"] >= 1
 
 
+@pytest.mark.live
 def test_api_analyze_direct_text(client):
-    """Verify direct text legal analysis through API."""
+    """Verify direct text legal analysis through API (requires live LLM)."""
     payload = {
         "raw_text": (
             "Arbitration dispute between TechSolutions Ltd and State Power Corp. "

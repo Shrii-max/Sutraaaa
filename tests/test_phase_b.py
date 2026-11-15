@@ -216,6 +216,7 @@ def test_translation_caching():
 # =============================================================================
 # Test 7: API Endpoints (POST /documents/{id}/translate & GET /documents/{id}/translations/{lang})
 # =============================================================================
+@pytest.mark.live
 def test_document_translation_api_endpoints(client: TestClient, db_session):
     # Setup test lawyer and case
     lawyer = UserModel(
@@ -289,6 +290,7 @@ def test_document_translation_api_endpoints(client: TestClient, db_session):
 # =============================================================================
 # Test 8: Case Summary Translation API Endpoint
 # =============================================================================
+@pytest.mark.live
 def test_case_summary_translation_api_endpoint(client: TestClient, db_session):
     lawyer = UserModel(
         email="summary_lawyer@example.com",
@@ -336,6 +338,7 @@ def test_case_summary_translation_api_endpoint(client: TestClient, db_session):
 # =============================================================================
 # Test 9: Tenant Isolation on Translation
 # =============================================================================
+@pytest.mark.live
 def test_translation_tenant_isolation(client: TestClient, db_session):
     lawyer1 = UserModel(
         email="lawyer1@example.com",

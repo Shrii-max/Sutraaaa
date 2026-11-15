@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     # Database
     DB_URL: str = Field(
-        default="sqlite:///demo_lexagent.db",
+        default="sqlite:///lexagent.db",
         validation_alias=AliasChoices("DB_URL", "DATABASE_URL"),
         description="SQLAlchemy database URL.",
     )
@@ -203,14 +203,41 @@ class Settings(BaseSettings):
         description="Enable cryptographic shredding of document vault blobs and DB rows upon erasure.",
     )
 
-    # Multilingual & Voice Settings
-    TRANSLATION_ENGINE: str = Field(
-        default="local_llm",
-        description="Translation engine provider ('local_llm', 'indictrans2', 'nllb').",
+    # Multilingual & Translation Settings (Decoupled from LLM_BASE_URL)
+    TRANSLATE_ENGINE: str = Field(
+        default="http",
+        validation_alias=AliasChoices("TRANSLATE_ENGINE", "TRANSLATION_ENGINE"),
+        description="Translation engine: 'http' (generic translation server), 'indictrans2', 'nllb', 'local_llm', or 'stub'.",
+    )
+    TRANSLATE_BASE_URL: str = Field(
+        default="http://localhost:8088",
+        description="Dedicated translation microservice endpoint (decoupled from LLM_BASE_URL).",
+    )
+    TRANSLATE_API_KEY: Optional[str] = Field(
+        default=None,
+        description="Optional API key for dedicated translation service.",
+    )
+    TRANSLATE_TIMEOUT: float = Field(
+        default=15.0,
+        description="Request timeout in seconds for translation service.",
     )
     TRANSLATION_BACKCHECK_THRESHOLD: float = Field(
         default=0.75,
         description="Minimum back-translation similarity score before flagging needs_human_review.",
+    )
+
+    # Voice & Speech Settings
+    VOICE_PROVIDER: str = Field(
+        default="local",
+        description="Voice speech provider: 'local' (pyttsx3/browser Web Speech) or 'vapi' (cloud voice API with explicit user consent).",
+    )
+    VAPI_BASE_URL: str = Field(
+        default="https://api.vapi.ai",
+        description="Base URL for optional Vapi service.",
+    )
+    VAPI_API_KEY: Optional[str] = Field(
+        default=None,
+        description="API key for optional Vapi service (only used if VOICE_PROVIDER=vapi and case consent granted).",
     )
     VOICEFLOW_BASE_URL: str = Field(
         default="http://localhost:8080",
@@ -227,6 +254,12 @@ class Settings(BaseSettings):
     VOICE_STORE_AUDIO: bool = Field(
         default=False,
         description="Persist synthesized speech audio files to disk (default False: ephemeral RAM only).",
+    )
+
+    # Demo Mode Guard (Hard Rule 4 & 5: No dummy seeds unless explicitly requested)
+    DEMO_MODE: bool = Field(
+        default=False,
+        description="Whether demo seeding and sample accounts are active. Production default is strictly False.",
     )
 
     # Backward-compatible properties

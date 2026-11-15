@@ -321,6 +321,8 @@ def list_precedents(
                 "court": r.court,
                 "judgment_date": r.judgment_date,
                 "ratio_decidendi": r.ratio_decidendi,
+                "source_url": getattr(r, "source_url", None),
+                "verification_status": getattr(r, "verification_status", "unverified"),
             }
             for r in records
         ],
@@ -361,19 +363,6 @@ _dist_path = Path(__file__).resolve().parents[4] / "SUTRA da UIUX" / "dist"
 if _dist_path.exists():
     if (_dist_path / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist_path / "assets")), name="static-assets")
-
-    @app.middleware("http")
-    async def spa_fallback_middleware(request: Request, call_next):
-        accept = request.headers.get("accept", "")
-        path = request.url.path
-        if (
-            request.method == "GET"
-            and "text/html" in accept
-            and not path.startswith(("/api", "/auth", "/docs", "/openapi.json", "/redoc", "/assets"))
-            and not (_dist_path / path.lstrip("/")).is_file()
-        ):
-            return FileResponse(_dist_path / "index.html")
-        return await call_next(request)
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):

@@ -156,7 +156,14 @@ def test_fact_verifier_agent_nli_entailment():
         source_ref=SourceRef(document_id="doc-1", page=1, char_start=30, char_end=30+len(snippet), snippet=snippet),
     )
 
-    agent = FactVerifierAgent(llm_client=FakeLLMClient())
+    fake_llm = FakeLLMClient({
+        "_NLIEntailmentResult": {
+            "verdict": "supports",
+            "confidence": 0.95,
+            "reason": "Text explicitly supports statement",
+        }
+    })
+    agent = FactVerifierAgent(llm_client=fake_llm)
     output = agent.run(FactVerificationInput(
         document_id="doc-1",
         document_text=doc_text,
@@ -251,6 +258,7 @@ def test_security_prompt_injection_scanner():
     assert has_inj_hi is True
 
 
+@pytest.mark.live
 def test_api_ocr_inspection_and_correction(client, db_session):
     """Verify side-by-side OCR inspection and correction endpoints."""
     # Create lawyer user & case
@@ -315,6 +323,7 @@ def test_api_ocr_inspection_and_correction(client, db_session):
     assert "Section 420 IPC" in page.text
 
 
+@pytest.mark.live
 def test_api_contradiction_feedback_and_crypto_shred(client, db_session):
     """Verify contradiction feedback API and DPDP crypto-shredding endpoint."""
     lawyer = UserModel(

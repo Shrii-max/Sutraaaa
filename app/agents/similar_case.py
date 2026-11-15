@@ -100,6 +100,11 @@ class SimilarCaseAgent(BaseAgent[SimilarCaseInput, SimilarCaseOutput]):
                 message="no similar case found",
                 confidence=1.0,
                 needs_human_review=False,
+                engine="rules",
+                llm_called=False,
+                fallback_taken=True,
+                status="rule_based",
+                error_message="No precedent cases exceeded similarity threshold or embedding model unavailable.",
                 audit_notes="No precedent cases exceeded similarity threshold in local database.",
             )
 
@@ -216,6 +221,10 @@ class SimilarCaseAgent(BaseAgent[SimilarCaseInput, SimilarCaseOutput]):
             message="Similar cases successfully retrieved and verified from DB",
             confidence=0.92,
             needs_human_review=False,
+            engine="rules",
+            llm_called=False,
+            fallback_taken=True,
+            status="rule_based",
             audit_notes=f"Retrieved {len(verified_cases)} verified precedent cases from local database for fingerprint query.",
         )
 

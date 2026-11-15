@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from app.schemas.source import SourceRef
-from app.schemas.facts import DateItem, SectionItem, PartyItem
+from app.schemas.facts import DateItem, SectionItem, PartyItem, AmountItem, StatementItem, IncidentItem
 from app.ingestion.date_normalizer import normalize_legal_date, HINDI_MONTH_MAP
 
 
@@ -200,3 +200,243 @@ def check_fuzzy_name_variants(parties: List[PartyItem]) -> Dict[str, List[str]]:
                 variants[n1].append(n2)
 
     return variants
+
+
+def extract_parties_deterministic(
+    page_text_map: Dict[int, str],
+    document_id: str,
+) -> List[PartyItem]:
+    """Deterministically extract legal parties (Complainant, Accused, Petitioner, Respondent, etc.) with SourceRefs."""
+    results: List[PartyItem] = []
+    seen = set()
+
+    party_pattern = re.compile(
+        r"(?i)\b(Complainant|Accused|Petitioner|Respondent|Witness|Appellant|Defendant|Plaintiff|"
+        r"शिकायतकर्ता|अभियुक्त|वादी|प्रतिवादी|गवाह)\s*[:\-]\s*([^\n,;\.]{3,70})",
+        re.UNICODE,
+    )
+
+    for page_num, text in page_text_map.items():
+        for match in party_pattern.finditer(text):
+            role_raw = match.group(1).strip()
+            name_raw = match.group(2).strip()
+
+            # Normalize role
+            r_lower = role_raw.lower()
+            if r_lower in ["complainant", "शिकायतकर्ता"]:
+                role = "complainant"
+            elif r_lower in ["accused", "अभियुक्त"]:
+                role = "accused"
+            elif r_lower in ["petitioner", "वादी", "plaintiff"]:
+                role = "petitioner"
+            elif r_lower in ["respondent", "प्रतिवादी", "defendant"]:
+                role = "respondent"
+            elif r_lower in ["witness", "गवाह"]:
+                role = "witness"
+            else:
+                role = "party"
+
+            key = (name_raw.lower(), role)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            start = match.start()
+            end = match.end()
+            src = SourceRef(
+                document_id=document_id,
+                page=page_num,
+                char_start=start,
+                char_end=end,
+                snippet=match.group(0),
+            )
+            results.append(
+                PartyItem(
+                    name=name_raw,
+                    role=role,
+                    source=src,
+                    confidence=0.95,
+                )
+            )
+
+    return results
+
+
+def extract_amounts_deterministic(
+    page_text_map: Dict[int, str],
+    document_id: str,
+) -> List[AmountItem]:
+    """Deterministically extract monetary figures with INR normalization and exact SourceRefs."""
+    results: List[AmountItem] = []
+    seen = set()
+
+    amt_pattern = re.compile(
+        r"(?:Rs\.?|₹|INR|रुपये)\s*([\d,]+(?:\.\d{2})?)",
+        re.IGNORECASE | re.UNICODE,
+    )
+
+    for page_num, text in page_text_map.items():
+        for match in amt_pattern.finditer(text):
+            val_str = match.group(1).replace(",", "").strip()
+            try:
+                val = float(val_str)
+            except ValueError:
+                continue
+
+            if val in seen or val == 0:
+                continue
+            seen.add(val)
+
+            start = match.start()
+            end = match.end()
+            snippet = match.group(0)
+
+            # Extract surrounding context (up to 40 chars before/after)
+            ctx_start = max(0, start - 30)
+            ctx_end = min(len(text), end + 30)
+            context = text[ctx_start:ctx_end].replace("\n", " ").strip()
+
+            src = SourceRef(
+                document_id=document_id,
+                page=page_num,
+                char_start=start,
+                char_end=end,
+                snippet=snippet,
+            )
+            results.append(
+                AmountItem(
+                    value=val,
+                    currency="INR",
+                    context=context,
+                    source=src,
+                    confidence=0.98,
+                )
+            )
+
+    return results
+
+
+def extract_court_and_case_deterministic(
+    page_text_map: Dict[int, str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Deterministically identify court name and case/FIR registration number."""
+    court = None
+    case_no = None
+
+    court_pattern = re.compile(
+        r"(?i)\b(?:IN\s+THE\s+COURT\s+OF|BEFORE\s+THE\s+HON[\'\’]?BLE|न्यायालय\s*[:\s]+)\s*([^\n]+)",
+        re.UNICODE,
+    )
+    case_pattern = re.compile(
+        r"(?i)\b(?:FIR\s+No\.?|Case\s+No\.?|Civil\s+Suit\s+No\.?|Crl\.?\s*App\.?\s*No\.?|प्रकरण\s+संख्या)\s*[:\s]*([^\n,]+)",
+        re.UNICODE,
+    )
+
+    for text in page_text_map.values():
+        if not court:
+            m_c = court_pattern.search(text)
+            if m_c:
+                court = m_c.group(0).strip()
+        if not case_no:
+            m_no = case_pattern.search(text)
+            if m_no:
+                case_no = m_no.group(0).strip()
+
+    return court, case_no
+
+
+def extract_statements_deterministic(
+    page_text_map: Dict[int, str],
+    document_id: str,
+) -> List[StatementItem]:
+    """Deterministically extract statements recorded under procedural sections (161, 164 CrPC/BNSS)."""
+    results: List[StatementItem] = []
+    seen = set()
+
+    stmt_pattern = re.compile(
+        r"(?i)(?:Statement\s+of|बयान)\s+([^\n,]+?)\s+(?:recorded\s+under\s+Section|धारा)\s*(161|164|180|183)\s*"
+        r"(?:CrPC|BNSS|दंड\s+प्रक्रिया\s+संहिता)?(?:\s+(?:by|द्वारा)\s+([^\n,]+?))?(?:\s+(?:on|दिनांक)\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}))?",
+        re.UNICODE,
+    )
+
+    for page_num, text in page_text_map.items():
+        for match in stmt_pattern.finditer(text):
+            raw_speaker = match.group(1).strip()
+            sec_type = match.group(2).strip()
+            recorder = match.group(3).strip() if match.group(3) else None
+            date_recorded = match.group(4).strip() if match.group(4) else None
+
+            # Capture next 200 characters as statement content excerpt
+            st_start = match.start()
+            st_end = min(len(text), match.end() + 200)
+            content_snippet = text[st_start:st_end].strip()
+
+            key = (raw_speaker.lower(), sec_type, page_num)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            src = SourceRef(
+                document_id=document_id,
+                page=page_num,
+                char_start=st_start,
+                char_end=match.end(),
+                snippet=match.group(0),
+            )
+            results.append(
+                StatementItem(
+                    speaker=raw_speaker,
+                    role="witness",
+                    statement_type=sec_type,
+                    recorded_by=recorder,
+                    recorded_on=date_recorded,
+                    content=content_snippet,
+                    source=src,
+                    confidence=0.92,
+                )
+            )
+
+    return results
+
+
+def extract_incidents_deterministic(
+    page_text_map: Dict[int, str],
+    document_id: str,
+) -> List[IncidentItem]:
+    """Deterministically extract dated factual incidents with exact SourceRefs."""
+    results: List[IncidentItem] = []
+    seen = set()
+
+    incident_pattern = re.compile(
+        r"(?i)\b(?:On|Dated|दिनांक)\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*[,:\-]\s*([^\n\.\;]{10,140}[\.])",
+        re.UNICODE,
+    )
+
+    for page_num, text in page_text_map.items():
+        for match in incident_pattern.finditer(text):
+            date_str = match.group(1).strip()
+            desc = match.group(2).strip()
+
+            key = (date_str, desc[:30].lower())
+            if key in seen:
+                continue
+            seen.add(key)
+
+            src = SourceRef(
+                document_id=document_id,
+                page=page_num,
+                char_start=match.start(),
+                char_end=match.end(),
+                snippet=match.group(0),
+            )
+            results.append(
+                IncidentItem(
+                    title=f"Incident on {date_str}",
+                    description=desc,
+                    date=date_str,
+                    source=src,
+                    confidence=0.90,
+                )
+            )
+
+    return results

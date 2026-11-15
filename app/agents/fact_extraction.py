@@ -30,6 +30,11 @@ from app.security.guardrails import wrap_as_document_data, format_safe_system_pr
 from app.agents.deterministic_extractors import (
     extract_dates_deterministic,
     extract_sections_deterministic,
+    extract_parties_deterministic,
+    extract_amounts_deterministic,
+    extract_court_and_case_deterministic,
+    extract_statements_deterministic,
+    extract_incidents_deterministic,
     check_chronological_order,
     check_fuzzy_name_variants,
 )
@@ -122,10 +127,15 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
         )
 
         # ------------------------------------------------------------------
-        # Deterministic Rule-First Extraction (Dates & Statutory Sections)
+        # Deterministic Rule-First Extraction (Full Entity Suite)
         # ------------------------------------------------------------------
         det_dates = extract_dates_deterministic(page_text_map, input_data.document_id)
         det_sections = extract_sections_deterministic(page_text_map, input_data.document_id)
+        det_parties = extract_parties_deterministic(page_text_map, input_data.document_id)
+        det_amounts = extract_amounts_deterministic(page_text_map, input_data.document_id)
+        det_statements = extract_statements_deterministic(page_text_map, input_data.document_id)
+        det_incidents = extract_incidents_deterministic(page_text_map, input_data.document_id)
+        det_court, det_case_no = extract_court_and_case_deterministic(page_text_map)
 
         # ------------------------------------------------------------------
         # Anti-Hallucination Provenance Verification Layer
@@ -190,6 +200,13 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
             if src and p.name:
                 verified_parties.append(PartyItem(name=p.name, role=p.role or "party", source=src, confidence=p.confidence))
 
+        # Merge deterministic parties
+        existing_party_names = {p.name.strip().lower() for p in verified_parties}
+        for dp in det_parties:
+            if dp.name.strip().lower() not in existing_party_names:
+                verified_parties.append(dp)
+                existing_party_names.add(dp.name.strip().lower())
+
         verified_dates: List[DateItem] = []
         for d in raw_payload.dates:
             src = verify_and_build_source(d)
@@ -233,6 +250,13 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
             if src and a.value is not None:
                 verified_amounts.append(AmountItem(value=float(a.value), currency=a.currency or "INR", context=a.context or "Transaction", source=src, confidence=a.confidence))
 
+        # Merge deterministic amounts
+        existing_amt_vals = {round(a.value, 2) for a in verified_amounts}
+        for da in det_amounts:
+            if round(da.value, 2) not in existing_amt_vals:
+                verified_amounts.append(da)
+                existing_amt_vals.add(round(da.value, 2))
+
         verified_locations: List[LocationItem] = []
         for loc_item in raw_payload.locations:
             src = verify_and_build_source(loc_item)
@@ -244,6 +268,14 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
             src = verify_and_build_source(inc)
             if src and inc.description:
                 verified_incidents.append(IncidentItem(title=inc.title or "Incident", description=inc.description, date=inc.date_str, source=src, confidence=inc.confidence))
+
+        # Merge deterministic incidents
+        existing_inc_keys = {(inc.date, inc.description[:30].lower()) for inc in verified_incidents if inc.date}
+        for dinc in det_incidents:
+            key = (dinc.date, dinc.description[:30].lower())
+            if key not in existing_inc_keys:
+                verified_incidents.append(dinc)
+                existing_inc_keys.add(key)
 
         legacy_facts: List[FactItem] = []
         for idx, cf in enumerate(raw_payload.candidate_facts):
@@ -279,6 +311,14 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
                     source=src,
                     confidence=st.confidence,
                 ))
+
+        # Merge deterministic statements
+        existing_stmt_keys = {(st.speaker.lower(), st.statement_type) for st in verified_statements}
+        for dst in det_statements:
+            s_key = (dst.speaker.lower(), dst.statement_type)
+            if s_key not in existing_stmt_keys:
+                verified_statements.append(dst)
+                existing_stmt_keys.add(s_key)
 
         extracted_facts_obj = ExtractedFacts(
             parties=verified_parties,
@@ -342,7 +382,13 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
         if not defendants and raw_payload.parties_defendant:
             defendants = raw_payload.parties_defendant
 
-        court_val = raw_payload.court or raw_payload.court_name
+        court_val = raw_payload.court or raw_payload.court_name or det_court
+        case_no_val = raw_payload.case_number or det_case_no
+
+        engine_used = "rules" if review_needed else "llm"
+        fallback_taken = review_needed
+        status_val = "needs_review" if review_needed else "live_model"
+        err_msg = "Language model unreachable: results incomplete (Rule-based extraction only)." if review_needed else None
 
         return DocumentExtractionOutput(
             document_id=input_data.document_id,
@@ -350,14 +396,19 @@ class FactExtractionAgent(BaseAgent[DocumentExtractionInput, DocumentExtractionO
             parties_plaintiff=plaintiffs,
             parties_defendant=defendants,
             court_name=court_val,
-            case_number=raw_payload.case_number,
+            case_number=case_no_val,
             facts=legacy_facts,
             extracted_facts=extracted_facts_obj,
             rejected_facts_count=rejected_count,
             confidence=round(confidence, 2),
             needs_human_review=review_needed,
+            engine=engine_used,
+            llm_called=not review_needed,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=(
-                f"Extracted {total_extracted} verified items across 7 categories; "
+                f"Extracted {total_extracted} verified items across 7 categories via {engine_used}; "
                 f"rejected {rejected_count} items failing anti-hallucination snippet checks."
             ),
         )

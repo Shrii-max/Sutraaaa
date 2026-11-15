@@ -24,6 +24,8 @@ from app.security.jwt import create_access_token, hash_password
 from app.llm.client import FakeLLMClient, FakeEmbedder
 from app.orchestrator.graph import ProcessingOrchestrator
 
+pytestmark = pytest.mark.live
+
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 

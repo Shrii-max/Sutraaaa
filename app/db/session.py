@@ -13,8 +13,12 @@ def get_engine():
     settings = get_settings()
     db_url = settings.DB_URL
 
-    if db_url in ["sqlite:///demo_lexagent.db", "sqlite:///:memory:"]:
-        if db_url == "sqlite:///demo_lexagent.db":
+    if db_url in ["sqlite:///lexagent.db", "sqlite:///demo_lexagent.db", "sqlite:///:memory:"]:
+        if "lexagent.db" in db_url:
+            from pathlib import Path
+            live_db_path = Path(__file__).resolve().parent.parent.parent / "lexagent.db"
+            db_url = f"sqlite:///{live_db_path.as_posix()}"
+        elif "demo_lexagent.db" in db_url:
             from pathlib import Path
             demo_db_path = Path(__file__).resolve().parent.parent.parent / "demo_lexagent.db"
             if demo_db_path.exists():
@@ -39,8 +43,8 @@ def get_engine():
         return engine
     except Exception:
         from pathlib import Path
-        demo_db_path = Path(__file__).resolve().parent.parent.parent / "demo_lexagent.db"
-        sqlite_url = f"sqlite:///{demo_db_path.as_posix()}"
+        live_db_path = Path(__file__).resolve().parent.parent.parent / "lexagent.db"
+        sqlite_url = f"sqlite:///{live_db_path.as_posix()}"
         return create_engine(
             sqlite_url,
             echo=False,
@@ -118,6 +122,8 @@ def install_audit_append_only_triggers(engine):
 
 def init_db(engine=None):
     """Initialize database extension (pgvector), all tables, and audit immutability triggers."""
+    import app.db.models  # Ensure all ORM models are registered on Base.metadata
+
     if engine is None:
         engine = get_engine()
 

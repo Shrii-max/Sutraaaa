@@ -23,6 +23,9 @@ from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
 from app.schemas.common import BaseAgentInput
+import logging
+
+logger = logging.getLogger(__name__)
 from app.schemas.source import SourceRef
 from app.schemas.facts import ExtractedFacts, FactItem, DateItem, IncidentItem, StatementItem
 from app.schemas.timeline import (
@@ -124,7 +127,7 @@ class TimelineAgent(BaseAgent[TimelineInput, Timeline]):
             })
 
         # 4. LLM Refinement & Title Polishing Step
-        refined_events = self._refine_events_with_llm(normalized_events)
+        refined_events, llm_called, fallback_taken = self._refine_events_with_llm(normalized_events)
 
         # 5. Sort chronologically (earliest first, undated at end)
         refined_events.sort(key=lambda x: (x["normalized_date"] is None, x["normalized_date"] or "9999-99-99"))
@@ -179,6 +182,17 @@ class TimelineAgent(BaseAgent[TimelineInput, Timeline]):
         conf = 0.90 if not conflicts else 0.78
         needs_review = len(conflicts) > 0 or any(e.normalized_date is None for e in final_events)
 
+        engine_used = "llm" if llm_called and not fallback_taken else "rules"
+        status_val = "live_model" if engine_used == "llm" else "rule_based"
+        err_msg = "Language model unreachable: events timeline constructed using rule-based date normalization." if fallback_taken else None
+
+        logger.info(
+            "AGENT_EXECUTION agent=TimelineAgent engine=%s llm_called=%s fallback_taken=%s",
+            engine_used,
+            llm_called,
+            fallback_taken,
+        )
+
         return Timeline(
             case_id=input_data.case_id,
             events=final_events,
@@ -187,6 +201,11 @@ class TimelineAgent(BaseAgent[TimelineInput, Timeline]):
             has_conflicts=len(conflicts) > 0,
             confidence=conf,
             needs_human_review=needs_review,
+            engine=engine_used,
+            llm_called=llm_called,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=(
                 f"Generated case timeline with {len(final_events)} chronological events; "
                 f"flagged {len(conflicts)} date conflicts across documents."
@@ -227,10 +246,10 @@ class TimelineAgent(BaseAgent[TimelineInput, Timeline]):
         # LOW importance
         return "LOW"
 
-    def _refine_events_with_llm(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _refine_events_with_llm(self, events: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], bool, bool]:
         """Optionally polish event titles and refine importance using LLM."""
         if not events:
-            return events
+            return events, False, False
 
         summary_lines = [
             f"- ID: {e['event_id']} | Date: {e['normalized_date'] or e['date_str']} | "
@@ -248,24 +267,29 @@ class TimelineAgent(BaseAgent[TimelineInput, Timeline]):
             "Return valid JSON matching the schema."
         )
 
+        llm_called = False
+        fallback_taken = True
         try:
-            res, _ = self.llm.generate_structured(prompt=prompt, schema=_LLMTimelineScoringPayload, system=system)
-            llm_map = {item.event_id: item for item in res.events}
-            for ev in events:
-                if ev["event_id"] in llm_map:
-                    item = llm_map[ev["event_id"]]
-                    # Prefer HIGH if either rules or LLM decided HIGH
-                    if item.importance == "HIGH" or ev["importance"] == "HIGH":
-                        ev["importance"] = "HIGH"
-                    else:
-                        ev["importance"] = item.importance
-                    if item.title:
-                        ev["title"] = item.title
-                    ev["is_cause_of_action"] = item.is_cause_of_action
+            res, review_needed = self.llm.generate_structured(prompt=prompt, schema=_LLMTimelineScoringPayload, system=system)
+            if not review_needed and res and getattr(res, "events", None):
+                llm_called = True
+                fallback_taken = False
+                llm_map = {item.event_id: item for item in res.events}
+                for ev in events:
+                    if ev["event_id"] in llm_map:
+                        item = llm_map[ev["event_id"]]
+                        if item.importance == "HIGH" or ev["importance"] == "HIGH":
+                            ev["importance"] = "HIGH"
+                        else:
+                            ev["importance"] = item.importance
+                        if item.title:
+                            ev["title"] = item.title
+                        ev["is_cause_of_action"] = item.is_cause_of_action
         except Exception:
-            pass
+            llm_called = False
+            fallback_taken = True
 
-        return events
+        return events, llm_called, fallback_taken
 
     def _detect_date_conflicts(
         self, events: List[Dict[str, Any]]
@@ -569,6 +593,19 @@ class LimitationTimelineAgent(BaseAgent[TimelineAnalysisInput, TimelineAnalysisO
                     )
 
         reported_conf = float(getattr(llm_response, "confidence", 0.85) or 0.85)
+        llm_called = not review_needed
+        fallback_taken = review_needed
+        engine_used = "llm" if llm_called else "rules"
+        status_val = "live_model" if llm_called else "needs_review"
+        err_msg = "Language model unreachable: statutory limitation evaluated using rule-based heuristics only." if fallback_taken else None
+
+        logger.info(
+            "AGENT_EXECUTION agent=LimitationTimelineAgent engine=%s llm_called=%s fallback_taken=%s",
+            engine_used,
+            llm_called,
+            fallback_taken,
+        )
+
         return TimelineAnalysisOutput(
             document_id=input_data.document_id,
             events_chronological=timeline_events,
@@ -577,4 +614,9 @@ class LimitationTimelineAgent(BaseAgent[TimelineAnalysisInput, TimelineAnalysisO
             has_limitation_risk=has_risk,
             confidence=round(reported_conf, 2),
             needs_human_review=review_needed or has_risk,
+            engine=engine_used,
+            llm_called=llm_called,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
         )

@@ -16,11 +16,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Default to local SQLite demo database if DB_URL / DATABASE_URL not set
-DEMO_DB = PROJECT_ROOT / "demo_lexagent.db"
+# Default to local SQLite production database if DB_URL / DATABASE_URL not set
+LIVE_DB = PROJECT_ROOT / "lexagent.db"
 if "DATABASE_URL" not in os.environ and "DB_URL" not in os.environ:
-    os.environ["DATABASE_URL"] = f"sqlite:///{DEMO_DB.as_posix()}"
-    os.environ["DB_URL"] = f"sqlite:///{DEMO_DB.as_posix()}"
+    os.environ["DATABASE_URL"] = f"sqlite:///{LIVE_DB.as_posix()}"
+    os.environ["DB_URL"] = f"sqlite:///{LIVE_DB.as_posix()}"
 
 os.environ.setdefault("AUTO_INIT_DB", "true")
 
@@ -32,7 +32,7 @@ from app.security.jwt import hash_password
 
 
 def ensure_seeded_database():
-    """Ensure that the local SQLite database exists and is populated with legal authorities."""
+    """Ensure that the local SQLite database exists. Only seed demo users if DEMO_MODE=true."""
     settings = get_settings()
     init_db()
 
@@ -42,20 +42,21 @@ def ensure_seeded_database():
         s_count = session.query(StatuteSection).count()
         u_count = session.query(UserModel).count()
 
-        # Seed Sutra advocate user if needed
-        aditi = session.query(UserModel).filter(UserModel.email == "aditi.khanna@sutra.demo").first()
-        if not aditi:
-            aditi = UserModel(
-                id="user-sutra-aditi",
-                email="aditi.khanna@sutra.demo",
-                password_hash=hash_password("sutra-demo"),
-                full_name="Aditi Khanna",
-                role="lawyer",
-                is_active=True,
-            )
-            session.add(aditi)
-            session.commit()
-            print("[+] Seeded default Sutra counsel: aditi.khanna@sutra.demo (Password: sutra-demo)")
+        # Seed Sutra advocate user only if DEMO_MODE is true
+        if os.environ.get("DEMO_MODE") == "true":
+            aditi = session.query(UserModel).filter(UserModel.email == "aditi.khanna@sutra.demo").first()
+            if not aditi:
+                aditi = UserModel(
+                    id="user-sutra-aditi",
+                    email="aditi.khanna@sutra.demo",
+                    password_hash=hash_password("sutra-demo"),
+                    full_name="Aditi Khanna",
+                    role="lawyer",
+                    is_active=True,
+                )
+                session.add(aditi)
+                session.commit()
+                print("[+] DEMO_MODE: Seeded demo Sutra counsel: aditi.khanna@sutra.demo")
 
         print(f"[*] LexAgent Database Ready: {j_count} Judgments, {s_count} Statutory Provisions, {session.query(UserModel).count()} Users.")
 

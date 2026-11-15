@@ -70,6 +70,11 @@ class FactVerificationOutput(BaseModel):
     needs_human_review: bool = False
     audit_notes: str = ""
     disclaimer: str = Field(default="LEGAL DISCLAIMER: LexAgent is a decision-support intelligence system.")
+    engine: str = Field(default="rules", description="Engine used: nli | rules")
+    llm_called: bool = Field(default=False)
+    fallback_taken: bool = Field(default=False)
+    status: Literal["live_model", "rule_based", "fallback", "failed", "needs_review"] = Field(default="rule_based")
+    error_message: Optional[str] = None
 
 
 class FactVerifierAgent(BaseAgent[FactVerificationInput, FactVerificationOutput]):
@@ -112,6 +117,30 @@ class FactVerifierAgent(BaseAgent[FactVerificationInput, FactVerificationOutput]
 
             # 2. Verification: Attribution check (wrong speaker / role)
             snippet_lower = clean_snippet.lower()
+            claim_lower = fact.claim_summary.lower()
+
+            # Negation discrepancy check
+            NEGATION_WORDS = {
+                "not", "didn't", "did not", "never", "failed", "refused", "denied",
+                "unpaid", "without", "no payment", "nahi", "nahin", "asweekar", "mana", "inkar"
+            }
+            snippet_has_neg = any(re.search(rf"\b{re.escape(w)}\b", snippet_lower) for w in NEGATION_WORDS)
+            claim_has_neg = any(re.search(rf"\b{re.escape(w)}\b", claim_lower) for w in NEGATION_WORDS)
+            if snippet_has_neg != claim_has_neg:
+                item = VerifiedFactItem(
+                    fact_id=fact.fact_id,
+                    claim_type=fact.claim_type,
+                    claim_summary=fact.claim_summary,
+                    snippet=fact.snippet,
+                    verdict="contradicts",
+                    confidence=0.95,
+                    reason="Semantic negation conflict: snippet asserts negative contrary to affirmative claim (or vice versa).",
+                    needs_human_review=True,
+                    source_ref=fact.source_ref,
+                )
+                rejected_items.append(item)
+                continue
+
             if fact.speaker:
                 speaker_lower = fact.speaker.lower()
                 # Check for explicit conflicting speaker markers in snippet
@@ -125,6 +154,37 @@ class FactVerifierAgent(BaseAgent[FactVerificationInput, FactVerificationOutput]
                         verdict="contradicts",
                         confidence=0.95,
                         reason=f"Attributed speaker '{fact.speaker}' contradicts the speaker identified in the source text.",
+                        needs_human_review=True,
+                        source_ref=fact.source_ref,
+                    )
+                    rejected_items.append(item)
+                    continue
+
+                # Speaker role swap checks
+                if "complainant" in speaker_lower and "accused" in snippet_lower and "complainant" not in snippet_lower:
+                    item = VerifiedFactItem(
+                        fact_id=fact.fact_id,
+                        claim_type=fact.claim_type,
+                        claim_summary=fact.claim_summary,
+                        snippet=fact.snippet,
+                        verdict="contradicts",
+                        confidence=0.95,
+                        reason="Role/speaker inversion: claim attributes to Complainant, but snippet describes Accused.",
+                        needs_human_review=True,
+                        source_ref=fact.source_ref,
+                    )
+                    rejected_items.append(item)
+                    continue
+
+                if "accused" in speaker_lower and "complainant" in snippet_lower and "accused" not in snippet_lower:
+                    item = VerifiedFactItem(
+                        fact_id=fact.fact_id,
+                        claim_type=fact.claim_type,
+                        claim_summary=fact.claim_summary,
+                        snippet=fact.snippet,
+                        verdict="contradicts",
+                        confidence=0.95,
+                        reason="Role/speaker inversion: claim attributes to Accused, but snippet describes Complainant.",
                         needs_human_review=True,
                         source_ref=fact.source_ref,
                     )
@@ -162,22 +222,18 @@ class FactVerifierAgent(BaseAgent[FactVerificationInput, FactVerificationOutput]
             confidence = raw_res.confidence
             reason = raw_res.reason
 
-            # If LLM failed / offline, verify entailment via entity token coverage
-            if verdict == "insufficient" and confidence <= 0.50:
-                claim_tokens = [w.lower() for w in re.findall(r"\w+", fact.claim_summary) if len(w) >= 3]
-                matches = [w for w in claim_tokens if w in snippet_lower]
-                if fact.speaker and fact.speaker.lower() in snippet_lower:
-                    matches.append(fact.speaker.lower())
-                if fact.date_str and fact.date_str in snippet_lower:
-                    matches.append(fact.date_str)
-                if fact.section_number and fact.section_number in snippet_lower:
-                    matches.append(fact.section_number)
-
-                total_check = max(1, len(claim_tokens))
-                if len(matches) / total_check >= 0.25:
+            # If LLM failed / offline, do NOT falsely claim NLI entailment
+            llm_offline = (model_used == "fallback" or (verdict == "insufficient" and confidence <= 0.50))
+            if llm_offline:
+                clean_claim = fact.claim_summary.strip().lower()
+                if clean_claim in snippet_lower and (snippet_has_neg == claim_has_neg):
                     verdict = "supports"
-                    confidence = 0.90
-                    reason = f"Snippet verbatim entails claim entities ({len(matches)} matches)."
+                    confidence = 0.88
+                    reason = "Verbatim substring match confirmed with no negation conflicts."
+                else:
+                    verdict = "insufficient"
+                    confidence = 0.50
+                    reason = "Language model offline: semantic NLI entailment could not run; advocate verification required."
 
             is_supported = (verdict == "supports" and confidence >= 0.80)
             item = VerifiedFactItem(
@@ -203,6 +259,12 @@ class FactVerifierAgent(BaseAgent[FactVerificationInput, FactVerificationOutput]
         overall_conf = round(1.0 - (rejection_rate * 0.5), 2)
         needs_review = rejected_count > 0 or overall_conf < 0.80
 
+        any_llm = any(not getattr(item, "needs_human_review", False) and item.confidence >= 0.90 for item in verified_items)
+        engine_used = "nli" if any_llm else "rules"
+        had_offline = any(item.reason and "offline" in item.reason for item in (verified_items + rejected_items))
+        status_val = "needs_review" if (had_offline or needs_review) else "live_model"
+        err_msg = "Language model offline: semantic NLI verification incomplete; counsel review required." if had_offline else None
+
         output = FactVerificationOutput(
             document_id=input_data.document_id,
             verified_facts=verified_items,
@@ -213,7 +275,12 @@ class FactVerifierAgent(BaseAgent[FactVerificationInput, FactVerificationOutput]
             rejection_rate=rejection_rate,
             overall_confidence=overall_conf,
             confidence=overall_conf,
-            needs_human_review=needs_review,
+            needs_human_review=needs_review or had_offline,
+            engine=engine_used,
+            llm_called=any_llm,
+            fallback_taken=had_offline,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=(
                 f"FactVerifier: Verified {len(verified_items)}/{total} facts (rejection rate: {rejection_rate*100}%). "
                 f"{rejected_count} facts routed to human review."

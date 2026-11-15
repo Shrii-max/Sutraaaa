@@ -59,7 +59,11 @@ class EvaluationHarness:
             citation="(2012) 1 SCC 40",
             summary="Bail jurisprudence under Section 420 IPC.",
             outcome="Bail Granted",
-            full_text="Bail is the rule and jail is the exception.",
+            full_text=(
+                "The primary purpose of bail in Indian criminal jurisprudence is to secure the attendance of "
+                "the accused at the trial. Deprivation of liberty must be considered a punishment unless required "
+                "to prevent tampering or evasion. Bail is the rule and jail is the exception under the Code of Criminal Procedure."
+            ),
         )
         self.session.add(j)
         self.session.commit()

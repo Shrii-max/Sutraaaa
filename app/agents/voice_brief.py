@@ -226,6 +226,10 @@ class VoiceBriefAgent(BaseAgent[VoiceBriefInput, VoiceBriefOutput]):
         word_count = len(script.split())
         est_seconds = max(10, int((word_count / 130) * 60))
 
+        logger.info(
+            "AGENT_EXECUTION agent=VoiceBriefAgent engine=tts llm_called=False fallback_taken=False"
+        )
+
         return VoiceBriefOutput(
             case_id=input_data.case_id,
             depth=input_data.depth,
@@ -236,6 +240,10 @@ class VoiceBriefAgent(BaseAgent[VoiceBriefInput, VoiceBriefOutput]):
             source_refs=source_refs,
             confidence=0.98,
             needs_human_review=False,
+            engine="tts",
+            llm_called=False,
+            fallback_taken=False,
+            status="rule_based",
             disclaimer="This is an artificial intelligence decision-support brief for advocates, not formal legal advice.",
         )
 
@@ -266,6 +274,7 @@ class VoiceQAAgent(BaseAgent[VoiceQuestionInput, VoiceQuestionOutput]):
                 question_text = ""
 
         if not question_text or not question_text.strip():
+            logger.info("AGENT_EXECUTION agent=VoiceQAAgent engine=rules llm_called=False fallback_taken=False")
             return VoiceQuestionOutput(
                 case_id=input_data.case_id,
                 transcribed_question="",
@@ -276,6 +285,10 @@ class VoiceQAAgent(BaseAgent[VoiceQuestionInput, VoiceQuestionOutput]):
                 source_refs=[],
                 confidence=1.0,
                 needs_human_review=False,
+                engine="rules",
+                llm_called=False,
+                fallback_taken=False,
+                status="rule_based",
                 disclaimer="This answer is generated for decision support based strictly on case records on file.",
             )
 
@@ -299,6 +312,7 @@ class VoiceQAAgent(BaseAgent[VoiceQuestionInput, VoiceQuestionOutput]):
             audio_bytes = self.voice_gateway.synthesize(refusal_text, language=input_data.language)
             audio_b64 = base64.b64encode(audio_bytes).decode("utf-8") if audio_bytes else None
 
+            logger.info("AGENT_EXECUTION agent=VoiceQAAgent engine=rules llm_called=False fallback_taken=False")
             return VoiceQuestionOutput(
                 case_id=input_data.case_id,
                 transcribed_question=question_text,
@@ -309,6 +323,10 @@ class VoiceQAAgent(BaseAgent[VoiceQuestionInput, VoiceQuestionOutput]):
                 source_refs=[],
                 confidence=1.0,
                 needs_human_review=False,
+                engine="rules",
+                llm_called=False,
+                fallback_taken=False,
+                status="rule_based",
                 disclaimer="This answer is generated for decision support based strictly on case records on file.",
             )
 
@@ -334,6 +352,7 @@ class VoiceQAAgent(BaseAgent[VoiceQuestionInput, VoiceQuestionOutput]):
             snippet="FIR recorded on record",
         )
 
+        logger.info("AGENT_EXECUTION agent=VoiceQAAgent engine=tts llm_called=False fallback_taken=False")
         return VoiceQuestionOutput(
             case_id=input_data.case_id,
             transcribed_question=question_text,
@@ -344,5 +363,9 @@ class VoiceQAAgent(BaseAgent[VoiceQuestionInput, VoiceQuestionOutput]):
             source_refs=[source_ref],
             confidence=0.96,
             needs_human_review=False,
+            engine="tts",
+            llm_called=False,
+            fallback_taken=False,
+            status="rule_based",
             disclaimer="This answer is generated for decision support based strictly on case records on file.",
         )

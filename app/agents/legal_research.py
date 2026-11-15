@@ -128,6 +128,7 @@ class LegalResearchAgent(BaseAgent[LegalResearchInput, LegalResearchOutput]):
                 f"precedents were found in the local database. In strict adherence to Rule #4, I am prohibited "
                 f"from generating or recalling legal assertions without verified database retrieval."
             )
+            logger.info("AGENT_EXECUTION agent=LegalResearchAgent engine=rules llm_called=False fallback_taken=False")
             return LegalResearchOutput(
                 query=query,
                 answer=refusal_text,
@@ -136,6 +137,10 @@ class LegalResearchAgent(BaseAgent[LegalResearchInput, LegalResearchOutput]):
                 refusal_reason="No relevant legal authorities found in the local verified database.",
                 confidence=1.0,
                 needs_human_review=False,
+                engine="rules",
+                llm_called=False,
+                fallback_taken=False,
+                status="rule_based",
                 audit_notes="Refused query: 0 relevant citations found in database.",
             )
 
@@ -169,19 +174,39 @@ class LegalResearchAgent(BaseAgent[LegalResearchInput, LegalResearchOutput]):
             "from the verified judicial and statutory excerpts provided. Outside recall is strictly forbidden."
         )
 
+        llm_called = False
+        fallback_taken = True
         try:
-            res, _ = self.llm.generate_structured(
+            res, review_needed = self.llm.generate_structured(
                 prompt=prompt,
                 schema=_LLMGroundedResearchResponse,
                 system=system,
             )
-            final_answer = res.answer
+            if not review_needed and res and getattr(res, "answer", None):
+                final_answer = res.answer
+                llm_called = True
+                fallback_taken = False
+            else:
+                raise RuntimeError("LLM response ungrounded or empty")
         except Exception:
             # Deterministic fallback answer quoting top authorities directly
             final_answer = (
                 f"Based on the retrieved statutory and judicial authorities from the database:\n\n"
                 + "\n\n".join([f"- **{c.title_or_act} ({c.citation_or_section})**: {c.verbatim_snippet[:250]}..." for c in top_citations[:3]])
             )
+            llm_called = False
+            fallback_taken = True
+
+        engine_used = "llm" if llm_called else "rules"
+        status_val = "live_model" if llm_called else "rule_based"
+        err_msg = "Language model unreachable: response generated directly from retrieved statutory/judicial quotes." if fallback_taken else None
+
+        logger.info(
+            "AGENT_EXECUTION agent=LegalResearchAgent engine=%s llm_called=%s fallback_taken=%s",
+            engine_used,
+            llm_called,
+            fallback_taken,
+        )
 
         return LegalResearchOutput(
             query=query,
@@ -189,7 +214,12 @@ class LegalResearchAgent(BaseAgent[LegalResearchInput, LegalResearchOutput]):
             citations=top_citations,
             is_refusal=False,
             confidence=0.92,
-            needs_human_review=False,
+            needs_human_review=fallback_taken,
+            engine=engine_used,
+            llm_called=llm_called,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=f"LegalResearchAgent synthesized grounded answer using {len(top_citations)} verified citations.",
         )
 
@@ -205,7 +235,10 @@ class LegalResearchAgent(BaseAgent[LegalResearchInput, LegalResearchOutput]):
         if not statutes:
             return []
 
-        query_vec = self.embedder.embed_query(query)
+        try:
+            query_vec = self.embedder.embed_query(query)
+        except Exception:
+            query_vec = []
         q_terms = set(re.findall(r"\w{3,}", query.lower()))
 
         scored: List[Tuple[float, StatuteSection]] = []

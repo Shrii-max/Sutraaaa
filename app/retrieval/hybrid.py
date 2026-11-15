@@ -155,7 +155,18 @@ class HybridRetriever:
         self, query: str, limit: int, filters: Optional[RetrievalFilter]
     ) -> List[RetrievedChunk]:
         """Dense embedding search on pgvector (with fallback for SQLite)."""
-        query_vec = self.embedder.embed_query(query)
+        try:
+            query_vec = self.embedder.embed_query(query)
+        except Exception as e:
+            logger.warning(
+                "Dense embedding search unavailable (%s); proceeding with sparse keyword retrieval only.",
+                e,
+            )
+            return []
+
+        if not query_vec or not any(query_vec):
+            return []
+
         is_postgres = "postgresql" in str(self.session.bind.url).lower() if self.session.bind else False
 
         if is_postgres:

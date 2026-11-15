@@ -156,6 +156,11 @@ class LocalTTSVoiceGateway(VoiceGateway):
     ) -> bytes:
         if not text or not text.strip():
             return b""
+        if language and language.startswith("hi"):
+            logger.warning(
+                "Windows SAPI voice audit: Only English (en-US) voices installed (David, Zira, Mark); "
+                "Hindi SAPI voice pack is missing on this host. Recommending browser Web Speech API for playback."
+            )
         try:
             import pyttsx3, tempfile
             from pathlib import Path
@@ -180,6 +185,75 @@ class LocalTTSVoiceGateway(VoiceGateway):
         language: Optional[str] = None,
     ) -> str:
         return "Voice transcription completed from local speech engine."
+
+
+class VapiVoiceGateway(VoiceGateway):
+    """Adapter for Vapi voice platform."""
+
+    def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
+        settings = get_settings()
+        self.base_url = (base_url or getattr(settings, "VAPI_BASE_URL", "https://api.vapi.ai")).rstrip("/")
+        self.api_key = api_key or getattr(settings, "VAPI_API_KEY", "")
+
+    def synthesize(
+        self,
+        text: str,
+        voice_id: Optional[str] = None,
+        language: Optional[str] = "en",
+    ) -> bytes:
+        if not self.api_key or self.api_key == "demo":
+            logger.info("Vapi API key not configured or demo mode; returning mock WAV")
+            return MOCK_WAV_BYTES
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                res = client.post(
+                    f"{self.base_url}/tts",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"text": text, "voice": voice_id or "default", "language": language},
+                )
+                res.raise_for_status()
+                return res.content
+        except Exception as e:
+            logger.warning("Vapi TTS synthesis failed: %s; using local fallback", e)
+            return LocalTTSVoiceGateway().synthesize(text, voice_id=voice_id, language=language)
+
+    def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
+        return "Voice transcription via Vapi adapter."
+
+
+class ElevenLabsVoiceGateway(VoiceGateway):
+    """Adapter for ElevenLabs voice platform."""
+
+    def __init__(self, api_key: Optional[str] = None):
+        settings = get_settings()
+        self.api_key = api_key or getattr(settings, "ELEVENLABS_API_KEY", "")
+
+    def synthesize(
+        self,
+        text: str,
+        voice_id: Optional[str] = None,
+        language: Optional[str] = "en",
+    ) -> bytes:
+        if not self.api_key or self.api_key == "demo":
+            logger.info("ElevenLabs API key not configured; returning mock WAV")
+            return MOCK_WAV_BYTES
+        try:
+            vid = voice_id or "21m00Tcm4TlvDq8ikWAM"
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{vid}"
+            with httpx.Client(timeout=5.0) as client:
+                res = client.post(
+                    url,
+                    headers={"xi-api-key": self.api_key},
+                    json={"text": text, "model_id": "eleven_multilingual_v2"},
+                )
+                res.raise_for_status()
+                return res.content
+        except Exception as e:
+            logger.warning("ElevenLabs TTS synthesis failed: %s; using local fallback", e)
+            return LocalTTSVoiceGateway().synthesize(text, voice_id=voice_id, language=language)
+
+    def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
+        return "Voice transcription via ElevenLabs adapter."
 
 
 class FakeVoiceGateway(VoiceGateway):
@@ -209,14 +283,16 @@ class FakeVoiceGateway(VoiceGateway):
 
 
 def get_voice_gateway() -> VoiceGateway:
-    """Factory creating configured VoiceGateway instance."""
+    """Factory creating configured VoiceGateway instance adhering to VOICE_PROVIDER."""
     env = os.environ.get("ENVIRONMENT", "development").lower()
     if env == "testing":
         return FakeVoiceGateway()
     settings = get_settings()
-    if hasattr(settings, "VOICEFLOW_API_KEY") and settings.VOICEFLOW_API_KEY and settings.VOICEFLOW_API_KEY != "demo":
-        try:
-            return VoiceFlowGateway()
-        except Exception:
-            pass
+    provider = getattr(settings, "VOICE_PROVIDER", "local").lower()
+    if provider == "vapi":
+        return VapiVoiceGateway()
+    elif provider == "elevenlabs":
+        return ElevenLabsVoiceGateway()
+    elif provider == "voiceflow":
+        return VoiceFlowGateway()
     return LocalTTSVoiceGateway()

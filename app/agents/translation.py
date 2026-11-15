@@ -73,7 +73,8 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
         glossary_path: Optional[str] = None,
     ):
         super().__init__(llm_client=llm_client)
-        self.translator = translator or LocalLLMTranslator(llm_client=self.llm)
+        from app.llm.translator import get_translator
+        self.translator = translator or get_translator(llm_client=self.llm)
         if glossary_path:
             self.glossary_path = glossary_path
         else:
@@ -246,132 +247,163 @@ class TranslationAgent(BaseAgent[TranslationInput, TranslatedDocument]):
         overall_confidences: List[float] = []
         needs_review = False
         full_text_pieces: List[str] = []
+        engine_name = getattr(self.translator, "__class__", type(self.translator)).__name__
 
-        for p_data in pages_to_process:
-            page_num = p_data.get("page_number", 1)
-            raw_text = p_data.get("text", "")
+        try:
+            for p_data in pages_to_process:
+                page_num = p_data.get("page_number", 1)
+                raw_text = p_data.get("text", "")
 
-            if not raw_text.strip():
+                if not raw_text.strip():
+                    translated_pages.append(
+                        TranslatedPage(page_number=page_num, source_text="", translated_text="", alignments=[])
+                    )
+                    continue
+
+                # Sentence segmentation with SourceRef offsets
+                sentence_tuples = self.segment_sentences_with_offsets(raw_text)
+                page_alignments: List[SentenceAlignment] = []
+                page_trans_pieces: List[str] = []
+
+                for sent, s_start, s_end in sentence_tuples:
+                    # 1. Mask protected entities
+                    masked_sent, protected_map = self.mask_protected_tokens(sent)
+
+                    # 2. Extract glossary hints
+                    glossary_hints = None
+                    if input_data.preserve_glossary:
+                        glossary_hints = self.get_glossary_hints(sent, target_lang)
+
+                    # 3. Translate masked sentence
+                    translated_masked = self.translator.translate(
+                        masked_sent,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        glossary_hints=glossary_hints,
+                    )
+
+                    # 4. Restore protected entities
+                    restored_sent, missing_tokens = self.restore_protected_tokens(
+                        translated_masked, protected_map
+                    )
+
+                    if missing_tokens:
+                        all_issues.append(
+                            TranslationIssue(
+                                category="protected_token_altered",
+                                severity="HIGH",
+                                description=f"Protected token was altered or dropped in translation: {', '.join(missing_tokens)}",
+                                source_snippet=sent[:100],
+                            )
+                        )
+                        needs_review = True
+
+                    # 5. Build SourceRef and SentenceAlignment
+                    source_ref = SourceRef(
+                        document_id=doc_id,
+                        page=page_num,
+                        char_start=s_start,
+                        char_end=s_end,
+                        snippet=sent,
+                    )
+                    alignment = SentenceAlignment(
+                        source_sentence=sent,
+                        target_sentence=restored_sent,
+                        source_ref=source_ref,
+                    )
+                    page_alignments.append(alignment)
+                    page_trans_pieces.append(restored_sent)
+
+                page_full_trans = " ".join(page_trans_pieces)
+                full_text_pieces.append(page_full_trans)
+
+                # 6. Back-translation verification on page text
+                page_conf = 0.95
+                if input_data.verify_backtranslation and len(raw_text.strip()) > 10:
+                    sim_ratio, _ = self.verify_back_translation(
+                        original_text=raw_text,
+                        translated_text=page_full_trans,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                    )
+                    if sim_ratio < 0.70:
+                        page_conf = max(0.40, sim_ratio)
+                        needs_review = True
+                        all_issues.append(
+                            TranslationIssue(
+                                category="back_translation_divergence",
+                                severity="HIGH",
+                                description=(
+                                    f"Back-translation similarity ratio ({sim_ratio:.2f}) is below acceptable threshold 0.70 on page {page_num}."
+                                ),
+                                source_snippet=raw_text[:120],
+                            )
+                        )
+                    else:
+                        page_conf = min(0.98, max(0.75, sim_ratio))
+
+                overall_confidences.append(page_conf)
                 translated_pages.append(
-                    TranslatedPage(page_number=page_num, source_text="", translated_text="", alignments=[])
-                )
-                continue
-
-            # Sentence segmentation with SourceRef offsets
-            sentence_tuples = self.segment_sentences_with_offsets(raw_text)
-            page_alignments: List[SentenceAlignment] = []
-            page_trans_pieces: List[str] = []
-
-            for sent, s_start, s_end in sentence_tuples:
-                # 1. Mask protected entities
-                masked_sent, protected_map = self.mask_protected_tokens(sent)
-
-                # 2. Extract glossary hints
-                glossary_hints = None
-                if input_data.preserve_glossary:
-                    glossary_hints = self.get_glossary_hints(sent, target_lang)
-
-                # 3. Translate masked sentence
-                translated_masked = self.translator.translate(
-                    masked_sent,
-                    source_lang=source_lang,
-                    target_lang=target_lang,
-                    glossary_hints=glossary_hints,
-                )
-
-                # 4. Restore protected entities
-                restored_sent, missing_tokens = self.restore_protected_tokens(
-                    translated_masked, protected_map
-                )
-
-                if missing_tokens:
-                    all_issues.append(
-                        TranslationIssue(
-                            category="protected_token_altered",
-                            severity="HIGH",
-                            description=f"Protected token was altered or dropped in translation: {', '.join(missing_tokens)}",
-                            source_snippet=sent[:100],
-                        )
+                    TranslatedPage(
+                        page_number=page_num,
+                        source_text=raw_text,
+                        translated_text=page_full_trans,
+                        alignments=page_alignments,
                     )
-                    needs_review = True
-
-                # 5. Build SourceRef and SentenceAlignment
-                source_ref = SourceRef(
-                    document_id=doc_id,
-                    page=page_num,
-                    char_start=s_start,
-                    char_end=s_end,
-                    snippet=sent,
                 )
-                alignment = SentenceAlignment(
-                    source_sentence=sent,
-                    target_sentence=restored_sent,
-                    source_ref=source_ref,
-                )
-                page_alignments.append(alignment)
-                page_trans_pieces.append(restored_sent)
 
-            page_full_trans = " ".join(page_trans_pieces)
-            full_text_pieces.append(page_full_trans)
+            final_conf = (
+                sum(overall_confidences) / len(overall_confidences)
+                if overall_confidences
+                else 0.90
+            )
+            if final_conf < 0.75:
+                needs_review = True
 
-            # 6. Back-translation verification on page text
-            page_conf = 0.95
-            if input_data.verify_backtranslation and len(raw_text.strip()) > 10:
-                sim_ratio, _ = self.verify_back_translation(
-                    original_text=raw_text,
-                    translated_text=page_full_trans,
-                    source_lang=source_lang,
-                    target_lang=target_lang,
-                )
-                if sim_ratio < 0.70:
-                    page_conf = max(0.40, sim_ratio)
-                    needs_review = True
-                    all_issues.append(
-                        TranslationIssue(
-                            category="back_translation_divergence",
-                            severity="HIGH",
-                            description=(
-                                f"Back-translation similarity ratio ({sim_ratio:.2f}) is below acceptable threshold 0.70 on page {page_num}."
-                            ),
-                            source_snippet=raw_text[:120],
-                        )
-                    )
-                else:
-                    page_conf = min(0.98, max(0.75, sim_ratio))
-
-            overall_confidences.append(page_conf)
-            translated_pages.append(
-                TranslatedPage(
-                    page_number=page_num,
-                    source_text=raw_text,
-                    translated_text=page_full_trans,
-                    alignments=page_alignments,
-                )
+            result = TranslatedDocument(
+                document_id=doc_id,
+                source_language=source_lang,
+                target_language=target_lang,
+                pages=translated_pages,
+                full_translated_text="\n\n".join(full_text_pieces),
+                confidence=round(final_conf, 3),
+                needs_human_review=needs_review,
+                issues=all_issues,
+                content_hash=cache_hash,
+                disclaimer="Machine translation, not an official court translation. For decision-support only.",
+                engine=engine_name,
+                llm_called="llm" in engine_name.lower(),
+                fallback_taken=False,
+                status="live_model" if "fake" not in engine_name.lower() else "rule_based",
             )
 
-        final_conf = (
-            sum(overall_confidences) / len(overall_confidences)
-            if overall_confidences
-            else 0.90
-        )
-        if final_conf < 0.75:
-            needs_review = True
-
-        result = TranslatedDocument(
-            document_id=doc_id,
-            source_language=source_lang,
-            target_language=target_lang,
-            pages=translated_pages,
-            full_translated_text="\n\n".join(full_text_pieces),
-            confidence=round(final_conf, 3),
-            needs_human_review=needs_review,
-            issues=all_issues,
-            content_hash=cache_hash,
-            disclaimer="Machine translation, not an official court translation. For decision-support only.",
-        )
-
-        self._cache[cache_hash] = result
-        return result
+            self._cache[cache_hash] = result
+            return result
+        except Exception as e:
+            logger.error("Translation engine execution failed on doc %s: %s", doc_id, e)
+            return TranslatedDocument(
+                document_id=doc_id,
+                source_language=source_lang,
+                target_language=target_lang,
+                pages=[],
+                full_translated_text="",
+                confidence=0.0,
+                needs_human_review=True,
+                issues=[
+                    TranslationIssue(
+                        category="engine_unavailable",
+                        severity="CRITICAL",
+                        description=f"Translation engine '{engine_name}' unreachable or failed: {e}",
+                    )
+                ],
+                content_hash=cache_hash,
+                disclaimer="MACHINE TRANSLATION FAILED - TRANSLATION SERVICE UNAVAILABLE. Counsel must review original text.",
+                engine=engine_name,
+                llm_called="llm" in engine_name.lower(),
+                fallback_taken=True,
+                status="failed",
+                error_message=f"Translation engine '{engine_name}' unreachable ({e}). Machine translation aborted.",
+            )
 
     def translate_summary(
         self,

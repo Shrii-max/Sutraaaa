@@ -4,9 +4,12 @@ Follows Hard Rule 1: One class, typed Pydantic input/output, run() method, no hi
 Follows Hard Rule 3: Output carries confidence and needs_human_review.
 """
 
+import logging
 from typing import List
 from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
+
+logger = logging.getLogger(__name__)
 from app.schemas.risks import (
     LegalRiskItem,
     RiskAnalysisInput,
@@ -110,6 +113,19 @@ class LegalRiskAgent(BaseAgent[RiskAnalysisInput, RiskAnalysisOutput]):
             review_needed = True
 
         confidence = llm_response.confidence
+        llm_called = not review_needed
+        fallback_taken = review_needed
+        engine_used = "llm" if llm_called else "rules"
+        status_val = "live_model" if llm_called else "needs_review"
+        err_msg = "Language model unreachable: risk assessment based on statutory heuristics only." if fallback_taken else None
+
+        logger.info(
+            "AGENT_EXECUTION agent=LegalRiskAgent engine=%s llm_called=%s fallback_taken=%s",
+            engine_used,
+            llm_called,
+            fallback_taken,
+        )
+
         return RiskAnalysisOutput(
             document_id=input_data.document_id,
             risks=risk_items,
@@ -118,6 +134,11 @@ class LegalRiskAgent(BaseAgent[RiskAnalysisInput, RiskAnalysisOutput]):
             evidence_defects_found=any(r.category == "EVIDENTIARY_DEFECT" for r in risk_items),
             confidence=round(confidence, 2),
             needs_human_review=review_needed,
+            engine=engine_used,
+            llm_called=llm_called,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=f"Identified {len(risk_items)} legal risk factors.",
         )
 

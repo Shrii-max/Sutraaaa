@@ -113,16 +113,24 @@ class LocalLLMTranslator(Translator):
             return cleaned
         except Exception as e:
             logger.error("LocalLLMTranslator execution failed: %s", e)
-            return text
+            raise RuntimeError(
+                f"Local LLM translation engine unreachable or failed ({e}). Machine translation aborted."
+            ) from e
 
 
-class IndicTransTranslator(Translator):
-    """Adapter for offline IndicTrans2 or NLLB models via Transformers/CTranslate2."""
+class GenericHTTPTranslator(Translator):
+    """Connects to a dedicated external or local translation HTTP microservice (decoupled from LLM)."""
 
-    def __init__(self, model_path: Optional[str] = None):
-        self.model_path = model_path
-        self._initialized = False
-        self._fallback = LocalLLMTranslator()
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: float = 15.0,
+    ):
+        settings = get_settings()
+        self.base_url = (base_url or settings.TRANSLATE_BASE_URL).rstrip("/")
+        self.api_key = api_key or settings.TRANSLATE_API_KEY
+        self.timeout = timeout
 
     def translate(
         self,
@@ -131,10 +139,82 @@ class IndicTransTranslator(Translator):
         target_lang: str = "hi",
         glossary_hints: Optional[Dict[str, str]] = None,
     ) -> str:
-        # If neural weights are present in local environment, load pipeline; otherwise fallback to local LLM
+        if not text or not text.strip():
+            return ""
+
+        import httpx
+        url = f"{self.base_url}/translate"
+        payload = {
+            "text": text,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "glossary": glossary_hints or {},
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                translated = data.get("translated_text", "")
+                if not translated:
+                    raise ValueError("Empty response received from translation server")
+                return translated
+        except Exception as e:
+            logger.error("GenericHTTPTranslator request failed for %s: %s", url, e)
+            raise RuntimeError(
+                f"Translation engine unreachable at {url} ({e}). Machine translation aborted."
+            ) from e
+
+
+class IndicTransTranslator(Translator):
+    """Adapter stub for local IndicTrans2 neural translation model."""
+
+    def __init__(self, model_path: Optional[str] = None):
+        self.model_path = model_path
+        self._initialized = False
+
+    def translate(
+        self,
+        text: str,
+        source_lang: str = "en",
+        target_lang: str = "hi",
+        glossary_hints: Optional[Dict[str, str]] = None,
+    ) -> str:
+        if not text or not text.strip():
+            return ""
         if not self._initialized:
-            # Check for local weights or fallback
-            return self._fallback.translate(text, source_lang, target_lang, glossary_hints)
+            raise RuntimeError(
+                "IndicTrans2 model weights not initialized on host. "
+                "Configure TRANSLATE_ENGINE or load IndicTrans2 weights."
+            )
+        return text
+
+
+class NLLBTranslator(Translator):
+    """Adapter stub for NLLB neural translation model."""
+
+    def __init__(self, model_name: str = "facebook/nllb-200-distilled-600M"):
+        self.model_name = model_name
+        self._initialized = False
+
+    def translate(
+        self,
+        text: str,
+        source_lang: str = "en",
+        target_lang: str = "hi",
+        glossary_hints: Optional[Dict[str, str]] = None,
+    ) -> str:
+        if not text or not text.strip():
+            return ""
+        if not self._initialized:
+            raise RuntimeError(
+                f"NLLB neural translation model '{self.model_name}' not loaded on this host. "
+                "Configure TRANSLATE_ENGINE or load NLLB weights."
+            )
         return text
 
 
@@ -224,10 +304,16 @@ def get_translator(
     backend: Optional[str] = None,
     llm_client: Optional[LLMClient] = None,
 ) -> Translator:
-    """Factory creating configured Translator instance."""
-    backend = backend or os.environ.get("TRANSLATION_BACKEND", "llm").lower()
-    if backend == "fake":
+    """Factory creating configured Translator instance decoupled from LLM."""
+    settings = get_settings()
+    engine = (backend or getattr(settings, "TRANSLATE_ENGINE", None) or os.environ.get("TRANSLATE_ENGINE", "http")).lower()
+    if engine in ("fake", "stub"):
         return FakeTranslator()
-    elif backend == "indictrans":
+    elif engine in ("indictrans", "indictrans2"):
         return IndicTransTranslator()
-    return LocalLLMTranslator(llm_client=llm_client)
+    elif engine == "nllb":
+        return NLLBTranslator()
+    elif engine == "local_llm":
+        return LocalLLMTranslator(llm_client=llm_client)
+    else:
+        return GenericHTTPTranslator(base_url=settings.TRANSLATE_BASE_URL, api_key=settings.TRANSLATE_API_KEY)

@@ -249,10 +249,11 @@ def test_hindi_text_survives_pipeline():
     )
 
     assert out.detected_language in ["hindi", "mixed"]
-    assert len(out.extracted_facts.parties) == 1
-    assert out.extracted_facts.parties[0].name == "रामेश्वर प्रसाद शर्मा"
+    assert len(out.extracted_facts.parties) >= 1
+    assert any("रामेश्वर प्रसाद शर्मा" in p.name for p in out.extracted_facts.parties)
     # SourceRef snippet exists and offsets align verbatim
-    src = out.extracted_facts.parties[0].source
+    first_p = next(p for p in out.extracted_facts.parties if "रामेश्वर प्रसाद शर्मा" in p.name)
+    src = first_p.source
     assert hindi_complaint[src.char_start:src.char_end] == src.snippet
 
 

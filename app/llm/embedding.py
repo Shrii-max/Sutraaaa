@@ -74,13 +74,13 @@ class LocalEmbeddingClient:
             if embeddings and len(embeddings) == len(texts):
                 return embeddings
         except Exception as e:
-            logger.warning(
+            logger.error(
                 f"Local embedding endpoint ({url}) unreachable or returned error ({e}). "
-                f"Falling back to local deterministic embedding for testing/offline mode."
+                f"Semantic embedding search cannot proceed without a live embedding service."
             )
-
-        # Fallback deterministic pseudo-embedding with the exact configured dimension
-        return [self._fallback_embed(t, self._dim) for t in texts]
+            raise RuntimeError(
+                f"Local embedding endpoint ({url}) unreachable ({e}). Semantic vector search unavailable."
+            ) from e
 
     def embed_query(self, text: str) -> List[float]:
         results = self.embed_documents([text])

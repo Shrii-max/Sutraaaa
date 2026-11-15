@@ -9,9 +9,12 @@ Follows Requirement:
 import io
 import uuid
 import base64
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, Dict, Any
+
+logger = logging.getLogger(__name__)
 try:
     import pymupdf
 except ImportError:
@@ -196,10 +199,51 @@ class OCRAgent:
             pages = [PageOCR(page_number=1, text="", confidence=0.0)]
 
         overall_conf = round(sum(p.confidence for p in pages) / len(pages), 2)
+
+        engine = "pymupdf"
+        fallback_taken = False
+        status_val = "rule_based"
+        err_msg = None
+
+        if ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"]:
+            engine = "tesseract"
+            if not getattr(self.ocr_engine, "available", False):
+                fallback_taken = True
+                status_val = "failed" if overall_conf == 0.0 else "fallback"
+                err_msg = "Tesseract OCR engine is not installed on system PATH; scanned image text extraction unavailable."
+            else:
+                status_val = "live_model"
+        elif ext == ".pdf":
+            had_scanned = any(p.confidence < 0.95 for p in pages)
+            if had_scanned:
+                engine = "tesseract"
+                if not getattr(self.ocr_engine, "available", False):
+                    fallback_taken = True
+                    status_val = "fallback"
+                    err_msg = "Scanned PDF page required OCR, but Tesseract is not available on PATH."
+                else:
+                    status_val = "live_model"
+        elif ext in [".docx", ".doc"]:
+            engine = "rules"
+            status_val = "rule_based"
+        else:
+            engine = "rules"
+            status_val = "rule_based"
+
+        # Required structured log
+        logger.info(f"AGENT_EXECUTION: agent=OCRAgent engine={engine} llm_called=False fallback_taken={fallback_taken}")
+
+        needs_review = (overall_conf < 0.75) or fallback_taken or (status_val == "failed")
         result = OCRResult(
             document_id=doc_id,
             pages=pages,
             overall_confidence=overall_conf,
+            engine=engine,
+            llm_called=False,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            needs_human_review=needs_review,
+            error_message=err_msg,
         )
 
         record_audit_event(
@@ -207,10 +251,10 @@ class OCRAgent:
             actor=f"agent:{self.agent_name}",
             resource_id=doc_id,
             input_payload={"filename": filename, "size_bytes": len(raw_bytes)},
-            output_payload={"page_count": len(pages), "confidence": overall_conf},
+            output_payload={"page_count": len(pages), "confidence": overall_conf, "engine": engine, "fallback_taken": fallback_taken},
             confidence=overall_conf,
-            needs_human_review=overall_conf < 0.75,
-            status="SUCCESS",
+            needs_human_review=needs_review,
+            status="FAILED" if status_val == "failed" else "SUCCESS",
         )
 
         return result

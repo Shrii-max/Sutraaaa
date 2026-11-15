@@ -222,6 +222,8 @@ class ProcessingStepModel(Base):
     case_id = Column(String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=True, index=True)
     step_name = Column(String(100), nullable=False, index=True)
     status = Column(String(50), default="pending", nullable=False)  # pending, running, done, failed, needs_review
+    engine = Column(String(50), default="rules", nullable=True)  # regex, rules, llm, nli, embedder, tesseract, pymupdf, tts
+    fallback_taken = Column(Boolean, default=False, nullable=False)
     attempt = Column(Integer, default=0)
     state_payload = Column(Text, nullable=True)  # JSON serialized step output for resume
     error_message = Column(Text, nullable=True)
@@ -318,6 +320,9 @@ class Judgment(Base):
     citation = Column(String(150), unique=True, nullable=False, index=True)
     bench = Column(String(255), nullable=True)
     source_url = Column(String(512), nullable=True)
+    retrieved_on = Column(DateTime(timezone=True), nullable=True)
+    verified_by = Column(String(100), nullable=True)
+    verification_status = Column(String(50), default="unverified", nullable=False)
     sections_cited = Column(Text, default="[]")  # JSON serialized list of statutory sections
     outcome = Column(String(100), nullable=True)  # e.g. Allowed, Dismissed, Quashed, Remanded, Conviction Upheld
     summary = Column(Text, nullable=True)
@@ -337,6 +342,9 @@ class Judgment(Base):
             kwargs["title"] = kwargs.pop("case_title")
         if "judgment_date" in kwargs and "date" not in kwargs:
             kwargs["date"] = kwargs.pop("judgment_date")
+        full_text = kwargs.get("full_text")
+        if full_text is not None and (not str(full_text).strip() or len(str(full_text).strip()) < 100):
+            raise ValueError("Judgment rejected: full_text cannot be empty or shorter than 100 characters.")
         super().__init__(**kwargs)
 
     @property
@@ -397,6 +405,10 @@ class StatuteSection(Base):
     section_no = Column(String(50), nullable=False, index=True)  # e.g. 420, 138, 161
     heading = Column(String(255), nullable=False)
     text = Column(Text, nullable=False)
+    source_url = Column(String(512), nullable=True)
+    retrieved_on = Column(DateTime(timezone=True), nullable=True)
+    verified_by = Column(String(100), nullable=True)
+    verification_status = Column(String(50), default="unverified", nullable=False)
     embedding = Column(AdaptiveVector(EMBED_DIM), nullable=True)
     tsv = Column(AdaptiveTSVector, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

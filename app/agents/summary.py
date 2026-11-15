@@ -9,10 +9,13 @@ Follows Hard Rule 3: Output carries confidence and needs_human_review.
 Follows Hard Rule 7: Mixed Hindi / English / Hinglish documents handled properly.
 """
 
+import logging
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
+
+logger = logging.getLogger(__name__)
 from app.schemas.common import BaseAgentInput
 from app.schemas.source import SourceRef
 from app.schemas.facts import ExtractedFacts
@@ -221,6 +224,19 @@ class SummaryAgent(BaseAgent[SummaryInput, CaseSummary]):
             review_needed = True
             conf = min(conf, 0.75)
 
+        llm_called = not review_needed
+        fallback_taken = review_needed
+        engine_used = "llm" if llm_called else "rules"
+        status_val = "live_model" if llm_called else "needs_review"
+        err_msg = "Language model unreachable: automated summary generation incomplete." if fallback_taken else None
+
+        logger.info(
+            "AGENT_EXECUTION agent=SummaryAgent engine=%s llm_called=%s fallback_taken=%s",
+            engine_used,
+            llm_called,
+            fallback_taken,
+        )
+
         return CaseSummary(
             document_id=doc_id,
             summary_text=raw_summary,
@@ -231,5 +247,10 @@ class SummaryAgent(BaseAgent[SummaryInput, CaseSummary]):
             relief_sought=llm_payload.relief_sought,
             confidence=conf,
             needs_human_review=review_needed,
+            engine=engine_used,
+            llm_called=llm_called,
+            fallback_taken=fallback_taken,
+            status=status_val,
+            error_message=err_msg,
             audit_notes=f"SummaryAgent generated {final_word_count}-word summary in {lang} with {len(verified_key_points)} sourced key points.",
         )

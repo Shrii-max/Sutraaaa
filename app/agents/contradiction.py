@@ -184,6 +184,7 @@ class ContradictionAgent(BaseAgent[ContradictionInput, ContradictionReport]):
             # Execute 3-Vote LLM Jury
             jury_votes = []
             jury_iterations = settings.CONTRADICTION_JURY_VOTES
+            had_llm_vote = False
             for vote_idx in range(jury_iterations):
                 prompt = base_prompt if vote_idx == 0 else f"{base_prompt}\n\n[Jury Pass {vote_idx+1}]"
                 try:
@@ -194,14 +195,19 @@ class ContradictionAgent(BaseAgent[ContradictionInput, ContradictionReport]):
                     )
                     if not review_needed and getattr(res, "reason", ""):
                         jury_votes.append(res)
+                        had_llm_vote = True
                 except Exception:
                     pass
 
             if not jury_votes:
                 # Deterministic contradiction checks when local LLM is offline
+                t_a = item_a["text"].lower()
+                t_b = item_b["text"].lower()
+
+                # Rule 1: Weapon discrepancy
                 weapons = ["knife", "gun", "pistol", "revolver", "lathi", "sword", "iron rod", "चाकू", "पिस्तौल"]
-                w_a = [w for w in weapons if w in item_a["text"].lower()]
-                w_b = [w for w in weapons if w in item_b["text"].lower()]
+                w_a = [w for w in weapons if w in t_a]
+                w_b = [w for w in weapons if w in t_b]
                 if w_a and w_b and set(w_a) != set(w_b):
                     q_a = item_a["text"][:80].strip()
                     q_b = item_b["text"][:80].strip()
@@ -213,6 +219,48 @@ class ContradictionAgent(BaseAgent[ContradictionInput, ContradictionReport]):
                         quote_a=q_a,
                         quote_b=q_b,
                         confidence=0.92,
+                    ))
+
+                # Rule 2: Alibi / Scene Presence Conflict
+                presence_cues = ["present at the scene", "at the scene", "present at scene", "at the site"]
+                alibi_cues = ["hospital", "admitted in", "out of station", "at home", "another city"]
+                has_pres_a = any(c in t_a for c in presence_cues)
+                has_pres_b = any(c in t_b for c in presence_cues)
+                has_alibi_a = any(c in t_a for c in alibi_cues)
+                has_alibi_b = any(c in t_b for c in alibi_cues)
+
+                if (has_pres_a and has_alibi_b) or (has_pres_b and has_alibi_a):
+                    q_a = item_a["text"][:80].strip()
+                    q_b = item_b["text"][:80].strip()
+                    jury_votes.append(_LLMPairContradictionResult(
+                        judgment="contradictory",
+                        severity="HIGH",
+                        category="ALIBI_CONFLICT",
+                        reason="Direct alibi conflict: one statement asserts presence at the crime scene, while the other asserts admission to hospital or absence.",
+                        quote_a=q_a,
+                        quote_b=q_b,
+                        confidence=0.94,
+                    ))
+
+                # Rule 3: Negation Conflict on Payment / Obligation
+                neg_words = ["did not pay", "failed to pay", "not received", "unpaid", "refused to pay"]
+                pos_words = ["received payment", "paid the amount", "paid in full", "payment received"]
+                has_neg_a = any(w in t_a for w in neg_words)
+                has_neg_b = any(w in t_b for w in neg_words)
+                has_pos_a = any(w in t_a for w in pos_words)
+                has_pos_b = any(w in t_b for w in pos_words)
+
+                if (has_neg_a and has_pos_b) or (has_neg_b and has_pos_a):
+                    q_a = item_a["text"][:80].strip()
+                    q_b = item_b["text"][:80].strip()
+                    jury_votes.append(_LLMPairContradictionResult(
+                        judgment="contradictory",
+                        severity="MEDIUM",
+                        category="AMOUNT_DISCREPANCY",
+                        reason="Direct contradiction regarding financial discharge: one assertion confirms payment, the other denies receipt.",
+                        quote_a=q_a,
+                        quote_b=q_b,
+                        confidence=0.91,
                     ))
 
             if not jury_votes:

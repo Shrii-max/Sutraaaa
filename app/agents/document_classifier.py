@@ -93,6 +93,9 @@ class DocumentClassifierAgent(BaseAgent[DocumentClassifierInput, DocumentClassif
         )
 
         reported_conf = float(getattr(llm_response, "confidence", 0.80) or 0.80)
+        engine_used = "rules" if review_needed else "llm"
+        status_val = "fallback" if review_needed else "live_model"
+        err_msg = "Language model unreachable: classified via rules only." if review_needed else None
         if review_needed:
             reported_conf = min(reported_conf, 0.70)
 
@@ -113,7 +116,12 @@ class DocumentClassifierAgent(BaseAgent[DocumentClassifierInput, DocumentClassif
             relief_sought=getattr(llm_response, "relief_sought", None),
             confidence=round(reported_conf, 2),
             needs_human_review=review_needed or (reported_conf < 0.75),
-            audit_notes=f"Classified document as '{final_doc_type}' with confidence {reported_conf:.2f}.",
+            engine=engine_used,
+            llm_called=not review_needed,
+            fallback_taken=review_needed,
+            status=status_val,
+            error_message=err_msg,
+            audit_notes=f"Classified document as '{final_doc_type}' via {engine_used} (fallback={review_needed}) with confidence {reported_conf:.2f}.",
         )
 
     @staticmethod
