@@ -123,6 +123,10 @@ def install_audit_append_only_triggers(engine):
 def init_db(engine=None):
     """Initialize database extension (pgvector), all tables, and audit immutability triggers."""
     import app.db.models  # Ensure all ORM models are registered on Base.metadata
+    try:
+        import app.api.routers.moot_court
+    except Exception:
+        pass
 
     if engine is None:
         engine = get_engine()

@@ -9,6 +9,9 @@
 
 **LexAgent** is an enterprise-grade, **100% LOCAL**, privacy-first multi-agent legal document intelligence system architected specifically for Indian advocates, chambers, and judicial researchers. It processes complex bilingual legal files (FIRs, criminal complaints, bail applications, petitions, witness depositions, chargesheets, and orders) entirely on local infrastructure with **zero cloud AI API calls, zero telemetry, and zero data leakage**.
 
+> 🚀 **Quick Setup & Local LLM Guide:**  
+> For complete instructions on how to install Ollama, which models to download, `.env` setup, and 1-command startup, read the [**SETUP_README.md**](SETUP_README.md).
+
 ---
 
 ## System Architecture (6 Layers)

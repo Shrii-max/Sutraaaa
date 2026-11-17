@@ -25,6 +25,7 @@ from app.schemas.dossier import LegalIntelligenceReport
 from app.llm.embedding import get_embedding_client
 from app.api.routers.auth import router as auth_router
 from app.api.routers.assistant import router as assistant_router
+from app.api.routers.moot_court import router as moot_court_router
 from app.api.routers.cases import router as cases_router
 from app.api.routers.documents import router as documents_router
 from app.api.routers.facts import router as facts_router
@@ -51,6 +52,34 @@ async def lifespan(app: FastAPI):
             recovery = asyncio.create_task(asyncio.to_thread(DocumentManager.drain_pending_jobs, get_engine()))
         except Exception:
             logging.getLogger(__name__).exception("Could not initialize LexAgent document job recovery.")
+
+    # Startup health check: logs configured chat model and whether it answers
+    try:
+        import httpx
+        configured_model = settings.LLM_MODEL
+        with httpx.Client(timeout=httpx.Timeout(3.0, connect=0.5)) as test_client:
+            resp = test_client.post(
+                f"{settings.LLM_BASE_URL.rstrip('/')}/chat/completions",
+                json={
+                    "model": configured_model,
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 5,
+                },
+            )
+            if resp.status_code == 200:
+                logging.getLogger(__name__).info(
+                    "Startup LLM health check: configured model '%s' answers successfully.", configured_model
+                )
+            else:
+                logging.getLogger(__name__).warning(
+                    "Startup LLM health check: configured model '%s' returned HTTP %s: %s",
+                    configured_model, resp.status_code, resp.text[:200]
+                )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Startup LLM health check: configured model '%s' failed to answer: %s",
+            settings.LLM_MODEL, exc
+        )
     try:
         yield
     finally:
@@ -86,6 +115,7 @@ app.include_router(contradictions_router)
 app.include_router(voice_router)
 app.include_router(research_router)
 app.include_router(assistant_router)
+app.include_router(moot_court_router)
 app.include_router(audit_router)
 app.include_router(research_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
@@ -95,6 +125,7 @@ app.include_router(documents_router, prefix="/api/v1")
 app.include_router(facts_router, prefix="/api/v1")
 app.include_router(contradictions_router, prefix="/api/v1")
 app.include_router(voice_router, prefix="/api/v1")
+app.include_router(moot_court_router, prefix="/api/v1")
 app.include_router(audit_router, prefix="/api/v1")
 
 
@@ -382,7 +413,7 @@ if _dist_path.exists():
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
         # Don't intercept API or docs routes
-        if full_path.startswith(("api/", "auth/", "docs", "openapi.json", "redoc")):
+        if full_path.startswith(("api/", "auth/", "moot-court", "moot-court/", "docs", "openapi.json", "redoc")):
             raise HTTPException(status_code=404, detail="Not Found")
         file_path = _dist_path / full_path
         if full_path and file_path.is_file():

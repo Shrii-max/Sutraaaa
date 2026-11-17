@@ -6,7 +6,7 @@ Never hardcode secrets or model names.
 
 from functools import lru_cache
 from typing import Optional
-from pydantic import Field, AliasChoices
+from pydantic import Field, AliasChoices, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,23 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    MOOT_DRAFT_TIMEOUT: float = Field(default=30, gt=0, le=120)
+    MOOT_DRAFT_RETRIES: int = Field(default=1, ge=0, le=3)
+    MOOT_DRAFT_MAX_TOKENS: int = Field(default=1600, ge=256, le=8192)
+
+    MOOT_RUBRIC_WEIGHTS: dict[str, int] = Field(default_factory=lambda: {
+        "legal_reasoning": 25, "precedent": 20, "statute": 15, "facts": 15,
+        "rebuttal": 15, "bench_responsiveness": 10,
+    })
+
+    @field_validator("MOOT_RUBRIC_WEIGHTS")
+    @classmethod
+    def validate_moot_weights(cls, weights: dict[str, int]) -> dict[str, int]:
+        dimensions = {"legal_reasoning", "precedent", "statute", "facts", "rebuttal", "bench_responsiveness"}
+        if weights.keys() != dimensions or any(weight <= 0 for weight in weights.values()) or sum(weights.values()) != 100:
+            raise ValueError("Moot rubric requires six positive weights totaling 100.")
+        return weights
 
     # Local LLM endpoint (Ollama / vLLM / OpenAI-compatible local server)
     LLM_BASE_URL: str = Field(

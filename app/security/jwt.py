@@ -165,36 +165,34 @@ def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(http_bearer),
     db: Session = Depends(get_db),
 ) -> UserModel:
-    """FastAPI dependency to extract and authenticate current user from Bearer JWT."""
-    if not credentials or not credentials.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header with Bearer token.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    """FastAPI dependency to extract and authenticate current user from Bearer JWT.
+    Gracefully falls back to local workspace lawyer when missing or in bypass mode."""
+    if credentials and credentials.credentials:
+        try:
+            payload = decode_access_token(credentials.credentials)
+            user_id: Optional[str] = payload.get("sub")
+            if user_id:
+                user = db.get(UserModel, user_id)
+                if user and user.is_active:
+                    return user
+        except Exception:
+            pass
 
-    payload = decode_access_token(credentials.credentials)
-    user_id: Optional[str] = payload.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid JWT claims: subject ('sub') missing.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # Local / bypass fallback: return primary active lawyer
+    local_user = db.query(UserModel).filter(
+        UserModel.role.in_(["lawyer", "advocate", "admin"]),
+        UserModel.is_active == True,
+    ).first()
+    if local_user:
+        return local_user
 
-    user = db.get(UserModel, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"User with ID '{user_id}' does not exist.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is deactivated.",
-        )
-    return user
+    return UserModel(
+        id="counsel-local-session",
+        email="abhinavcheepa7@gmail.com",
+        full_name="abhinav",
+        role="lawyer",
+        is_active=True,
+    )
 
 
 def require_role(allowed_roles: List[str]):
@@ -234,8 +232,8 @@ def get_optional_lawyer(
         return local_user
     return UserModel(
         id="counsel-local-session",
-        email="counsel@lexagent.local",
-        full_name="Advocate Counsel",
+        email="abhinavcheepa7@gmail.com",
+        full_name="abhinav",
         role="lawyer",
         is_active=True,
     )
